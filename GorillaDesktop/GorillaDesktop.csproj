@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>GorillaDesktop</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>disable</Nullable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <!-- Gorilla Tag kurulum yolu; farklıysa: dotnet build -p:GamePath="..." -->
+    <GamePath Condition="'$(GamePath)' == ''">D:\SteamLibrary\steamapps\common\Gorilla Tag</GamePath>
+    <Managed>$(GamePath)\Gorilla Tag_Data\Managed</Managed>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="BepInEx" HintPath="$(GamePath)\BepInEx\core\BepInEx.dll" Private="false" />
+    <Reference Include="Assembly-CSharp" HintPath="$(Managed)\Assembly-CSharp.dll" Private="false" />
+    <Reference Include="UnityEngine" HintPath="$(Managed)\UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(Managed)\UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="UnityEngine.PhysicsModule" HintPath="$(Managed)\UnityEngine.PhysicsModule.dll" Private="false" />
+    <Reference Include="UnityEngine.XRModule" HintPath="$(Managed)\UnityEngine.XRModule.dll" Private="false" />
+    <Reference Include="PhotonUnityNetworking" HintPath="$(Managed)\PhotonUnityNetworking.dll" Private="false" />
+    <Reference Include="PhotonRealtime" HintPath="$(Managed)\PhotonRealtime.dll" Private="false" />
+    <Reference Include="Photon3Unity3D" HintPath="$(Managed)\Photon3Unity3D.dll" Private="false" />
+    <Reference Include="UnityEngine.TextRenderingModule" HintPath="$(Managed)\UnityEngine.TextRenderingModule.dll" Private="false" />
+    <Reference Include="UnityEngine.AudioModule" HintPath="$(Managed)\UnityEngine.AudioModule.dll" Private="false" />
+    <Reference Include="UnityEngine.VRModule" HintPath="$(Managed)\UnityEngine.VRModule.dll" Private="false" />
+    <Reference Include="UnityEngine.InputLegacyModule" HintPath="$(Managed)\UnityEngine.InputLegacyModule.dll" Private="false" />
+  </ItemGroup>
+
+  <!-- Derleme sonrası DLL'i doğrudan BepInEx\plugins içine kopyala -->
+  <Target Name="CopyToPlugins" AfterTargets="Build" Condition="Exists('$(GamePath)\BepInEx\plugins')">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GamePath)\BepInEx\plugins" ContinueOnError="true" />
+  </Target>
+
+</Project>
