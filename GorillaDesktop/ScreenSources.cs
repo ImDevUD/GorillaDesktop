@@ -16,8 +16,6 @@ namespace GorillaDesktop
         // false ise imleci oyun içinde biz çizeriz
         bool DrawsCursor { get; }
         Texture Texture { get; }
-        // Arkadaşlarla paylaşım açıkken kareler buna da verilir
-        StreamPublisher Publisher { get; set; }
         void Start();
         void Stop();
         // Ana thread'de her kare çağrılır
@@ -51,7 +49,6 @@ namespace GorillaDesktop
         public int Height => capture.Height;
         public bool DrawsCursor => true;
         public Texture Texture => texture;
-        public StreamPublisher Publisher { get => capture.Publisher; set => capture.Publisher = value; }
 
         public void Start() => capture.Start();
         public void Stop() => capture.Stop();

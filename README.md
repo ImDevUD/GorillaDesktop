@@ -1,64 +1,74 @@
 # GorillaDesktop
 
-Gorilla Tag için bilgisayar ekranını oyunun içine getiren BepInEx modu.
-Ekranını VR'da önünde görürsün, parmağınla ya da lazerle kullanırsın, PC sesi de
-ekrandan gelir. İstersen modlu lobide arkadaşlarınla birlikte izleyebilirsin.
+A BepInEx mod that puts a TV inside Gorilla Tag. Open a home screen in VR, tap YouTube, Netflix,
+Discord and more with your finger, or show your whole PC desktop.
 
-## Özellikler
+## Features
 
-- **Oyun içi monitör:** Ana monitörün tam çözünürlükte, ekran kartı üzerinden yakalanır
-  (Desktop Duplication). Oyunu kasmaz.
-- **GT düğmesi gibi dokunma:** İşaret parmağının ucuyla ekrana basarak tıklarsın;
-  titreşim ve tık sesi gelir.
-- **Uzaktan lazer** (isteğe bağlı): İşaret parmağının devamından çıkar, tetikle tıklar.
-- **İki elle büyütme:** Ekranı grip ile tut; iki elle tutup açınca büyür, kapatınca küçülür.
-- **PC sesi oyunda:** Ses ekrandan 3B olarak gelir.
-- **Ayarlar paneli:** Ekranın sağındaki ⚙ tuşu. Monitör, FPS, ses, dokunma, lazer, logo.
-- **Arkadaşlarla izleme:** Utilla modlu lobide ekranını herkese yayınla (en fazla 10 izleyici).
-- WalkSim ile masaüstünden de çalışır (F8 aç/kapat, F9 tık).
+- **TV home screen:** Live clock, app tiles and your PC screen ("My Screen") in one menu.
+- **Apps:** YouTube, Netflix, Disney+, Prime Video, Discord, Hulu, Twitch and Spotify on the home screen.
+  Tap **+** to add HBO Max, Kick, TikTok, Crunchyroll, Apple TV, Paramount+, SoundCloud, X,
+  Instagram or Reddit.
+- **Apps open full screen:** Websites open in Edge app mode with no address bar or tabs.
+  Discord and Spotify open their desktop apps if installed. A loading screen shows until the app is ready.
+- **Touch like a GT button:** Press the screen with your index fingertip to click, with the GT click sound
+  and vibration.
+- **SteamVR-style keyboard:** Type with your fingers or point at keys and pull the trigger. Turkish letters,
+  symbols and voice typing (Mic). Every key is sent right away.
+- **In-game monitor:** Your monitor at full resolution, captured on the GPU (Desktop Duplication).
+  Does not slow the game down.
+- **Move and resize:** Grab the screen with grip; grab with both hands and pull apart / push together to resize.
+- **Lock:** Lock the screen in place. While locked, Y does not hide or move it and grip does not move it.
+- **Settings panel:** The gear at the top right of the screen: lock, monitor, FPS, touch, click sound, GTV logo.
 
-## Kurulum
+PC sound plays from your PC as usual; the mod does not touch audio.
 
-1. Gorilla Tag'de **BepInEx** kurulu olmalı. Arkadaşlarla izleme için **Utilla** da gerekir.
-2. [Releases](../../releases) sayfasından son sürümün zip'ini indir.
-3. İçindeki `GorillaDesktop.dll` dosyasını `Gorilla Tag\BepInEx\plugins` klasörüne koy.
-4. Oyunu aç, **sol kumandadaki Y** tuşuna bas.
+## Install
 
-## Kontroller (VR)
+1. Install **BepInEx** for Gorilla Tag.
+2. Download the latest zip from [Releases](../../releases).
+3. Put `GorillaDesktop.dll` into `Gorilla Tag\BepInEx\plugins`.
+4. Start the game and press **Y on the left controller**.
 
-| Tuş | İşlev |
+## Controls (VR)
+
+| Input | Action |
 |---|---|
-| Sol **Y** | Ekranı aç/kapat |
-| İşaret parmağıyla ekrana dokun | Tıkla |
-| **Grip** (el ekranın yanındayken) | Ekranı tut ve taşı; iki elle tutup büyüt/küçült |
-| **Tetik** (lazer açıkken) | Lazerle tıkla |
-| **A / X** | Sağ tık |
-| **Joystick** | Kaydır |
-| Sağ **B** | Windows ekran klavyesi |
+| Left **Y** | Show / hide the screen (does nothing while locked) |
+| Touch a tile or the screen with your index finger | Open / click |
+| **Home** button (under the gear) | Back to the home screen (the app keeps running) |
+| **Keyboard** button (under the gear) | Show / hide the keyboard |
+| **Trigger** while pointing at the keyboard | Press a key |
+| **Grip** (hand next to the screen) | Grab and move; two hands to resize |
+| **Joystick** while grabbing | Push the screen away / pull it closer |
 
-## PC sesi
+WalkSim (desktop): F8 shows/hides the screen (opens straight to your PC screen), hold F6 to move it.
 
-Mod, PC sesini sanal bir ses cihazından (varsayılan: **Steam Streaming Speakers**) yakalar
-ve oyunun kendi sesini kulaklıkta tutar. Ekran açıkken bu yönlendirmeyi otomatik yapar,
-kapatınca eski haline döndürür. Config'den kapatılabilir.
+## Netflix, Disney+ and other protected video
 
-## Arkadaşlarla izleme
+Streaming sites protect their video, and Windows shows protected video as black in screen capture.
+To avoid this, the mod starts Edge with hardware acceleration turned off (your own profile, so you stay
+signed in). Good to know:
 
-Bir aktarma sunucusu gerekir; bir arkadaş grubunda tek kişinin kurması yeter.
-Adımlar: [GorillaDesktopRelay/KURULUM.md](GorillaDesktopRelay/KURULUM.md)
+- If Edge is already running when you open the first app, the mod closes and restarts it. Your tabs come
+  back the next time you open Edge yourself.
+- Turn off **Startup boost** in Edge (`edge://settings/system`), or Edge may start in the background with
+  acceleration on.
+- With acceleration off, these sites usually play at 720p.
 
-## Ayarlar
+## Settings file
 
-Oyunu bir kez açınca `Gorilla Tag\BepInEx\config\com.gorilladesktop.gtag.cfg` oluşur.
-Her ayarın açıklaması dosyanın içinde yazıyor.
+After the first launch, `Gorilla Tag\BepInEx\config\com.gorilladesktop.gtag.cfg` is created.
+Each setting is described inside the file.
 
-## Kaynaktan derleme
+## Building from source
 
-.NET SDK gerekir. `GorillaDesktop/GorillaDesktop.csproj` içindeki `GamePath` oyunun
-kurulu olduğu klasörü göstermeli (ya da `-p:GamePath="..."` ile ver).
+Needs the .NET SDK. `GamePath` in `GorillaDesktop/GorillaDesktop.csproj` must point to your
+Gorilla Tag folder (or pass `-p:GamePath="..."`).
 
 ```
 dotnet build GorillaDesktop -c Release
 ```
 
-Derlenen DLL otomatik olarak oyunun `BepInEx\plugins` klasörüne kopyalanır.
+The menu images in `GorillaDesktop/Assets` are embedded into the DLL. The built DLL is copied to the
+game's `BepInEx\plugins` folder automatically.

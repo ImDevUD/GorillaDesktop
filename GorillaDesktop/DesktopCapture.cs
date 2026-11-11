@@ -15,7 +15,6 @@ namespace GorillaDesktop
         public int SourceHeight { get; }
         public int Width { get; }
         public int Height { get; }
-        public volatile StreamPublisher Publisher;
 
         private readonly int frameIntervalMs;
         private readonly object frameLock = new object();
@@ -100,8 +99,6 @@ namespace GorillaDesktop
                     if (sum != lastChecksum)
                     {
                         lastChecksum = sum;
-                        var publisher = Publisher;
-                        if (publisher != null && publisher.WantsFrame) publisher.SubmitFrame(scratch, Width, Height);
                         lock (frameLock)
                         {
                             var tmp = latest;

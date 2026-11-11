@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using BepInEx;
 using BepInEx.Configuration;
@@ -15,16 +16,16 @@ namespace GorillaDesktop
     {
         public const string Guid = "com.gorilladesktop.gtag";
         public const string Name = "GorillaDesktop";
-        public const string Version = "4.1.0";
+        public const string Version = "6.1.0";
 
         internal static ManualLogSource Log;
 
         public enum ControlMode { Otomatik, VR, Masaustu }
 
         // Windows sanal tuş kodları
-        private const int VK_PRIOR = 0x21, VK_NEXT = 0x22, VK_F6 = 0x75, VK_F7 = 0x76, VK_F8 = 0x77, VK_F9 = 0x78;
+        private const int VK_F6 = 0x75, VK_F8 = 0x77;
 
-        // Parmak ucu: bu kadar yakına gelince imleç parmağı takip eder; yüzeye değince basar
+        // Parmak ucu: bu kadar yakına gelince imleç parmağı takip eder; yüzeye önden değince tıklar
         private const float HoverDistance = 0.08f, PressDepth = 0.004f, ReleaseDistance = 0.02f;
 
         private ConfigEntry<ControlMode> mode;
@@ -32,41 +33,22 @@ namespace GorillaDesktop
         private ConfigEntry<float> screenWidthMeters;
         private ConfigEntry<int> captureFps;
         private ConfigEntry<bool> forceGdi;
-        private ConfigEntry<Vector3> pointerRotationOffset, aimOffset;
-        private ConfigEntry<float> scrollSpeed;
-        private ConfigEntry<bool> refocusGame;
-        private ConfigEntry<int> keyToggle, keyClick, keyRightClick, keyMove, keyScrollUp, keyScrollDown;
-        private ConfigEntry<bool> audioEnabled, audioAutoRoute, touchEnabled, laserEnabled, showLogo, pressSound;
-        private ConfigEntry<string> audioDevice, audioSavedDefault;
-        private ConfigEntry<float> audioVolume, audioMaxDistance, cursorSize;
-        private ConfigEntry<string> shareServer, shareKey, sharePlace;
-        private ConfigEntry<float> shareQuality;
-        private ConfigEntry<int> shareFps;
-        private ConfigEntry<bool> shareModdedOnly;
-
-        // Arkadaşlarla paylaşım
-        private ShareSession share;
-        private StreamPublisher publisher;
-        private StreamViewer viewer;
-        private SharedScreen sharedView;
-        private int viewerOwner;
-        private float nextPoseSync;
-        private string shareNotice = "";
+        private ConfigEntry<int> keyToggle, keyMove;
+        private ConfigEntry<bool> touchEnabled, showLogo, pressSound, locked;
+        private ConfigEntry<string> audioSavedDefault, lockedPose;
+        private ConfigEntry<string> addedApps;
 
         private IScreenSource source;
         private Material screenMat;
-        private AudioLoopback audio;
-        private AudioSource audioSource;
         private AudioRouter router;
         private SettingsUi settings;
         private MonitorModel model;
+        private HomeMenu menu;
+        private VrKeyboard keyboard;
         private Font font;
 
         private GameObject screenRoot;
         private Transform screen;
-        private Transform cursor;
-        private readonly LineRenderer[] lasers = new LineRenderer[2];
-        private readonly Transform[] laserDots = new Transform[2];
         private bool visible;
         private float screenWidth, screenAspect;
 
@@ -74,25 +56,18 @@ namespace GorillaDesktop
         private Transform[] palms;
         private Transform[] fingertips;
         private float nextFingertipSearch;
-        // Parmak düzken ölçülen parmak ucu konumu (el yerel uzayında); lazer bunu kullanır
-        private readonly Vector3[] straightTipLocal = new Vector3[2];
-        private readonly bool[] straightCalibrated = new bool[2];
+        private int fingertipSearches;
+        private readonly Transform[] fingerBuffer = new Transform[2]; // her karede dizi oluşturmamak için
 
-        // İşaretçiler: VR'da 0 = sağ el, 1 = sol el; masaüstünde sadece 0 = kamera
-        private readonly Pointer[] pointers = { new Pointer(), new Pointer() };
-        private int pointerCount;
-        private int activePointer, clickOwner = -1;
-
-        private bool prevToggle, prevKeyboard, leftDown;
-        private Vector2Int lastCursor = new Vector2Int(-1, -1);
-        private float scrollAccum;
-        private IntPtr gameWindow;
+        // Grip ile tutma: VR'da iki el, masaüstünde (WalkSim) kamera + F6
+        private readonly Hand[] hands = { new Hand(), new Hand() };
+        private int handCount;
+        private bool prevToggle;
 
         // Parmakla basma
         private int touchHand = -1;
         private readonly float[] prevFingerFront = { 1f, 1f };
-        private SettingsUi.Button fingerHoverA, fingerHoverB;
-        private readonly Transform[] fingerBuffer = new Transform[2]; // her karede dizi oluşturmamak için
+        private Vector2Int lastCursor = new Vector2Int(-1, -1);
 
         // Taşıma / iki elle büyütme
         private readonly List<int> grabbing = new List<int>(2);
@@ -101,107 +76,49 @@ namespace GorillaDesktop
         private Quaternion grabLocalRot, lastHandsFrame = Quaternion.identity;
         private float twoHandStartDist, twoHandStartWidth;
 
-        private sealed class Pointer
+        private sealed class Hand
         {
-            public Transform T;    // lazerin çıktığı yer (VR: el, masaüstü: kamera)
-            public Vector3 Origin, Dir, HitPoint, UiPoint;
-            public Vector2 Uv;
-            public SettingsUi.Button UiButton;
-            public bool Trigger, Grip, Secondary, Hit;
-            public bool PrevTrigger, PrevGrip, PrevSecondary;
+            public Transform T;
+            public bool Grip, PrevGrip, Trigger, PrevTrigger;
             public float Stick;
-
-            // Son karelerin ekran noktaları: tetiğe basma hareketi eli oynatır, tık basmadan hemen önceki noktaya gider
-            private readonly Vector2[] uvHistory = new Vector2[32];
-            private readonly float[] timeHistory = new float[32];
-            private readonly bool[] hitHistory = new bool[32];
-            private int historyPos;
-
-            public void Record()
-            {
-                historyPos = (historyPos + 1) % uvHistory.Length;
-                uvHistory[historyPos] = Uv;
-                timeHistory[historyPos] = Time.unscaledTime;
-                hitHistory[historyPos] = Hit;
-            }
-
-            public Vector2 UvAgo(float seconds)
-            {
-                var target = Time.unscaledTime - seconds;
-                for (var k = 0; k < uvHistory.Length; k++)
-                {
-                    var idx = (historyPos - k + uvHistory.Length) % uvHistory.Length;
-                    if (!hitHistory[idx]) break;
-                    if (timeHistory[idx] <= target) return uvHistory[idx];
-                }
-                return Uv;
-            }
         }
 
         private void Awake()
         {
             Log = Logger;
             mode = Config.Bind("Genel", "KontrolModu", ControlMode.Otomatik,
-                "Otomatik: VR başlık takılıysa kumandalar, değilse (WalkSim) klavye + ekran ortası nişan");
+                "Otomatik: VR headset on = controllers, otherwise (WalkSim) keyboard");
             monitorIndex = Config.Bind("Genel", "Monitor", -1,
-                "Yansıtılacak monitör sırası (0, 1, ...). -1 = otomatik (VR: ana monitör, masaüstü: oyunun açık OLMADIĞI monitör)");
-            refocusGame = Config.Bind("Genel", "TiklamadanSonraOyunaDon", true,
-                "Masaüstü modunda tıkladıktan sonra odağı oyuna geri ver. Diğer uygulamaya yazı yazmak istiyorsan false yap");
-            screenWidthMeters = Config.Bind("Ekran", "GenislikMetre", 1.6f, "Oyun içi ekranın başlangıç genişliği (metre)");
-            captureFps = Config.Bind("Ekran", "FPS", 60, "Saniyede en fazla kaç kare");
-            forceGdi = Config.Bind("Ekran", "EskiYontemiZorla", false, "true = GPU yerine eski (yavaş) GDI yakalamayı kullan");
-            cursorSize = Config.Bind("Ekran", "ImlecBoyutu", 1f, "Oyun içi fare imlecinin boyut çarpanı");
-            showLogo = Config.Bind("Ekran", "GTVLogosu", true, "Çerçevenin alt kenarında beyaz GTV logosu göster");
-            laserEnabled = Config.Bind("Lazer", "Acik", false, "VR: ellerden uzaktan tıklama lazeri (kapalıyken sadece parmakla basılır)");
-            pointerRotationOffset = Config.Bind("Lazer", "YonOfseti", new Vector3(90f, 0f, 0f),
-                "Yedek: kumanda nişan yönü okunamazsa lazerin el dönüşüne göre açısı (derece)");
-            aimOffset = Config.Bind("Lazer", "NisanOfseti", Vector3.zero,
-                "Lazerin kumanda nişan yönüne göre açısı (derece). Ör. biraz aşağı bakıyorsa x'i eksi yap");
-            scrollSpeed = Config.Bind("Lazer", "KaydirmaHizi", 6f, "Kaydırma hızı");
+                "Monitor to show (0, 1, ...). -1 = auto (VR: primary monitor, desktop: the monitor the game is NOT on)");
+            screenWidthMeters = Config.Bind("Ekran", "GenislikMetre", 1.6f, "Default screen width (meters)");
+            captureFps = Config.Bind("Ekran", "FPS", 60, "Max capture frames per second");
+            forceGdi = Config.Bind("Ekran", "EskiYontemiZorla", false, "true = use the old (slow) GDI capture instead of GPU");
+            showLogo = Config.Bind("Ekran", "GTVLogosu", true, "Show the white GTV logo on the bottom of the frame");
+            locked = Config.Bind("Ekran", "Kilitli", false,
+                "Lock: Y does not hide/summon the screen and grip does not move it. The screen opens at its locked place");
+            lockedPose = Config.Bind("Ekran", "KilitliKonum", "", "Used by the mod: where the screen was locked");
 
-            const string keyHelp = "Windows sanal tuş kodu (onluk). Liste: learn.microsoft.com/windows/win32/inputdev/virtual-key-codes";
-            keyToggle = Config.Bind("Klavye", "EkranAcKapat", VK_F8, "F8. " + keyHelp);
-            keyClick = Config.Bind("Klavye", "SolTik", VK_F9, "F9 (basılı tut = sürükle)");
-            keyRightClick = Config.Bind("Klavye", "SagTik", VK_F7, "F7");
-            keyMove = Config.Bind("Klavye", "EkraniTasi", VK_F6, "F6 (basılı tut, kamerayla birlikte taşınır)");
-            keyScrollUp = Config.Bind("Klavye", "YukariKaydir", VK_PRIOR, "Page Up");
-            keyScrollDown = Config.Bind("Klavye", "AsagiKaydir", VK_NEXT, "Page Down");
+            const string keyHelp = "Windows virtual key code (decimal): learn.microsoft.com/windows/win32/inputdev/virtual-key-codes";
+            keyToggle = Config.Bind("Klavye", "EkranAcKapat", VK_F8, "F8: show/hide screen. " + keyHelp);
+            keyMove = Config.Bind("Klavye", "EkraniTasi", VK_F6, "F6 (hold): move the screen with the camera");
 
-            audioEnabled = Config.Bind("Ses", "Acik", true, "PC sesini oyun içi ekrandan çal");
-            audioDevice = Config.Bind("Ses", "Cihaz", "Steam Streaming Speakers",
-                "PC sesinin gideceği sanal çıkış cihazının adı (bir kısmı yeterli). Mod sesi buradan yakalar");
-            audioAutoRoute = Config.Bind("Ses", "OtomatikYonlendir", true,
-                "Ekran açıkken Windows varsayılan çıkışını otomatik olarak yukarıdaki cihaza çevir, oyunun sesini kulaklıkta tut. " +
-                "Ekran kapanınca/oyundan çıkınca eski haline döner. false = Windows ses ayarlarını elle yap");
+            // Eski sürümler Windows ses çıkışını değiştiriyordu; geri alınmamış kaldıysa düzeltmek için okunur
             audioSavedDefault = Config.Bind("Ses", "OncekiVarsayilanCihaz", "",
-                "Mod tarafından kullanılır, elle değiştirme. Doluysa ses yönlendirmesi geri alınmamış demektir");
-            audioVolume = Config.Bind("Ses", "Seviye", 1f, "Ses seviyesi (0-1)");
-            audioMaxDistance = Config.Bind("Ses", "MaksMesafe", 20f, "Bu mesafeden (metre) sonra ses duyulmaz");
-            touchEnabled = Config.Bind("Dokunma", "Acik", true, "VR: işaret parmağı ucuyla ekrana basarak tıkla (GT düğmeleri gibi)");
-            pressSound = Config.Bind("Dokunma", "TikSesi", true, "Basınca GT düğmesi sesi ve titreşim");
-
-            shareServer = Config.Bind("Paylasim", "Sunucu", "",
-                "Aktarma sunucusunun adresi, ör. wss://gorilladesktop.onrender.com (boşsa paylaşım kapalı)");
-            shareKey = Config.Bind("Paylasim", "Anahtar", "", "Sunucudaki SECRET ile aynı olmalı. Arkadaşlarında da aynısı olmalı");
-            shareQuality = Config.Bind("Paylasim", "Kalite", 0.6f, "Yayın görüntü kalitesi (0.3 - 0.9). Yüksek = net ama daha çok internet");
-            shareFps = Config.Bind("Paylasim", "FPS", 15, "Yayının saniyedeki kare sayısı");
-            shareModdedOnly = Config.Bind("Paylasim", "SadeceModluLobi", true, "Ortak ekran sadece Utilla modlu lobilerde çalışsın");
-            sharePlace = Config.Bind("Paylasim", "SabitKonum", "",
-                "Ortak ekranın sabit yeri (ayarlardaki 'Ortak ekranın yeri burası' tuşu doldurur). " +
-                "Arkadaşlarında da aynısı olmalı. Boşsa ekran, yayıncının koyduğu yerde çıkar");
-            share = new ShareSession(shareModdedOnly.Value);
+                "Used by the mod, do not edit. Old versions changed the Windows sound output; if set, it is restored on start");
+            touchEnabled = Config.Bind("Dokunma", "Acik", true, "VR: click by touching the screen with your index fingertip");
+            pressSound = Config.Bind("Dokunma", "TikSesi", true, "GT button click sound and vibration when pressing");
+            addedApps = Config.Bind("Menu", "EklenenUygulamalar", "", "Used by the mod: apps added from the + page (comma separated)");
 
             Native.TrySetDpiAware();
 
-            // Önceki oturum çöktüyse ses ayarlarını geri al
+            // Eski sürümden kalan ses yönlendirmesi varsa geri al (mod artık sese dokunmuyor)
             router = new AudioRouter(audioSavedDefault);
             if (router.IsRouted)
             {
-                Log.LogWarning("Önceki oturumdan kalan ses yönlendirmesi geri alınıyor.");
+                Log.LogWarning("Eski sürümden kalan ses yönlendirmesi geri alınıyor.");
                 router.Restore();
             }
             Application.quitting += Cleanup;
-            AppDomain.CurrentDomain.ProcessExit += (_, __) => router.Restore();
         }
 
         private bool IsVR()
@@ -213,174 +130,48 @@ namespace GorillaDesktop
 
         // ---------------------------------------------------------------- giriş
 
-        // Kumandaları/klavyeyi okuyup işaretçileri doldurur
-        private void ReadInputs(GorillaTagger tagger, bool vr, out bool toggle, out bool keyboard)
+        private bool ReadInputs(GorillaTagger tagger, bool vr)
         {
             var poller = ControllerInputPoller.instance;
-            toggle = Native.KeyDown(keyToggle.Value);
-            keyboard = false;
+            var toggle = Native.KeyDown(keyToggle.Value);
 
             if (vr && poller != null)
             {
                 toggle |= poller.leftControllerSecondaryButton;
-                keyboard = poller.rightControllerSecondaryButton;
-                FillHand(pointers[0], tagger.rightHandTransform, poller.rightControllerIndexFloat, poller.rightControllerGripFloat,
-                    poller.rightControllerPrimaryButton, poller.rightControllerPrimary2DAxis.y);
-                FillHand(pointers[1], tagger.leftHandTransform, poller.leftControllerIndexFloat, poller.leftControllerGripFloat,
-                    poller.leftControllerPrimaryButton, poller.leftControllerPrimary2DAxis.y);
-                pointerCount = 2;
+                FillHand(hands[0], tagger.rightHandTransform, poller.rightControllerGripFloat, poller.rightControllerIndexFloat, poller.rightControllerPrimary2DAxis.y);
+                FillHand(hands[1], tagger.leftHandTransform, poller.leftControllerGripFloat, poller.leftControllerIndexFloat, poller.leftControllerPrimary2DAxis.y);
+                handCount = 2;
             }
             else
             {
-                // WalkSim: ekranın ortasından nişan al
-                var p = pointers[0];
+                // WalkSim: F6 basılıyken ekran kamerayla birlikte taşınır
                 var cam = Camera.main;
-                p.T = cam != null ? cam.transform : tagger.headCollider.transform;
-                p.Origin = p.T.position;
-                p.Dir = p.T.forward;
-                p.Trigger = p.Grip = p.Secondary = false;
-                p.Stick = 0f;
-                pointerCount = 1;
+                hands[0].T = cam != null ? cam.transform : tagger.headCollider.transform;
+                hands[0].Grip = Native.KeyDown(keyMove.Value);
+                hands[0].Stick = 0f;
+                handCount = 1;
             }
-
-            // Klavye her iki modda da birinci işaretçiyi kontrol eder (odak başka penceredeyken bile)
-            var k = pointers[0];
-            k.Trigger |= Native.KeyDown(keyClick.Value);
-            k.Secondary |= Native.KeyDown(keyRightClick.Value);
-            k.Grip |= Native.KeyDown(keyMove.Value);
-            if (Native.KeyDown(keyScrollUp.Value)) k.Stick += 1f;
-            if (Native.KeyDown(keyScrollDown.Value)) k.Stick -= 1f;
+            return toggle;
         }
 
-        private void FillHand(Pointer p, Transform hand, float trigger, float grip, bool secondary, float stick)
+        private static void FillHand(Hand h, Transform t, float grip, float trigger, float stick)
         {
-            p.T = hand;
-            p.Origin = hand.position;
-            p.Dir = hand.rotation * Quaternion.Euler(pointerRotationOffset.Value) * Vector3.forward;
-            // Tetiği hafif çekince tıklar (fare tuşu gibi anında), bırakmaya başlayınca bırakır
-            p.Trigger = p.Trigger ? trigger > 0.2f : trigger > 0.35f;
-            p.Grip = grip > 0.7f;
-            p.Secondary = secondary;
-            p.Stick = Mathf.Abs(stick) > 0.2f ? stick : 0f;
-
-            var i = p == pointers[0] ? 0 : 1;
-
-            // Lazer, gorilla elinin işaret parmağının devamı olarak dümdüz çıkar (f_index.01 -> f_index.03).
-            // Parmağın EN DÜZ olduğu an (iki kemik arası mesafe en uzun) kumandaya göre bir kez öğrenilip kilitlenir.
-            // Sonra lazer sadece kumandayla döner; parmak/başparmak animasyonu lazeri hiç oynatmaz.
-            if (indexBase[i] != null && indexTip[i] != null)
-            {
-                var along = indexTip[i].position - indexBase[i].position;
-                var chord = along.magnitude;
-                if (chord > 0.001f && chord > straightChord[i] + 0.002f)
-                {
-                    straightChord[i] = chord;
-                    straightLocalDir[i] = hand.InverseTransformDirection(along / chord);
-                    // Kemik son boğumun başında; ucu biraz ileride
-                    straightTipLocal[i] = hand.InverseTransformPoint(indexTip[i].position + along * 0.6f);
-                    straightCalibrated[i] = true;
-                }
-
-                if (straightCalibrated[i])
-                {
-                    p.Origin = hand.TransformPoint(straightTipLocal[i]);
-                    p.Dir = hand.TransformDirection(straightLocalDir[i]).normalized;
-                }
-            }
-            // Parmak kemikleri bulunamazsa: kumandanın nişan yönü
-            else if (TryControllerAim(i == 0 ? XRNode.RightHand : XRNode.LeftHand, out var aim))
-            {
-                p.Dir = aim * Quaternion.Euler(aimOffset.Value) * Vector3.forward;
-            }
-
-            // Titreme filtresi: küçük titremeleri yumuşat, hızlı hareketi anında takip et
-            var s = smoothedDir[i];
-            if (s.sqrMagnitude < 0.5f) s = p.Dir;
-            var angle = Vector3.Angle(s, p.Dir);
-            var follow = 0.12f + 0.88f * Mathf.Clamp01(angle / 4f) * Mathf.Clamp01(angle / 4f);
-            s = Vector3.Slerp(s, p.Dir, follow).normalized;
-            smoothedDir[i] = s;
-            p.Dir = s;
-        }
-
-        // Gorilla elinin işaret parmağı kemikleri (lazerin yönü bunlardan çıkar)
-        private readonly Transform[] indexBase = new Transform[2], indexTip = new Transform[2];
-        private readonly Vector3[] straightLocalDir = new Vector3[2], smoothedDir = new Vector3[2];
-        private readonly float[] straightChord = new float[2];
-        private float nextBoneSearch;
-
-        private void FindIndexBones(GorillaTagger tagger)
-        {
-            if ((indexBase[0] != null && indexBase[1] != null) || Time.time < nextBoneSearch) return;
-            nextBoneSearch = Time.time + 2f;
-            if (tagger.offlineVRRig == null) return;
-
-            foreach (var t in tagger.offlineVRRig.GetComponentsInChildren<Transform>(true))
-            {
-                var name = t.name.ToLowerInvariant();
-                var side = name.EndsWith(".r") ? 0 : name.EndsWith(".l") ? 1 : -1;
-                if (side < 0) continue;
-                if (name.StartsWith("f_index.01")) indexBase[side] = t;
-                else if (name.StartsWith("f_index.03")) indexTip[side] = t;
-            }
-
-            if (indexBase[0] != null && indexTip[0] != null)
-                Log.LogInfo($"İşaret parmağı kemikleri bulundu: {indexBase[0].name} -> {indexTip[0].name}");
-            else
-                Log.LogWarning("İşaret parmağı kemikleri bulunamadı; lazer kumanda yönünü kullanacak.");
-        }
-
-        private static readonly List<InputFeatureUsage> usageBuffer = new List<InputFeatureUsage>();
-        private readonly InputFeatureUsage<Quaternion>?[] pointerUsage = new InputFeatureUsage<Quaternion>?[2];
-        private readonly bool[] pointerUsageSearched = new bool[2];
-
-        // Kumandanın dünya uzayındaki nişan dönüşü. Takip uzayından dünyaya çevirmek için
-        // kafanın takip dönüşü ile kameranın dünya dönüşü arasındaki farkı kullanır (hiyerarşiden bağımsız)
-        private bool TryControllerAim(XRNode node, out Quaternion world)
-        {
-            world = Quaternion.identity;
-            var cam = Camera.main;
-            if (cam == null) return false;
-
-            var device = InputDevices.GetDeviceAtXRNode(node);
-            var head = InputDevices.GetDeviceAtXRNode(XRNode.Head);
-            if (!device.isValid || !head.isValid) return false;
-
-            // OpenXR "pointer" (nişan) pozu varsa onu kullan, yoksa kumandanın kendi dönüşü
-            var i = node == XRNode.RightHand ? 0 : 1;
-            if (!pointerUsageSearched[i] && device.TryGetFeatureUsages(usageBuffer))
-            {
-                pointerUsageSearched[i] = true;
-                foreach (var u in usageBuffer)
-                {
-                    var name = u.name.ToLowerInvariant();
-                    if (u.type == typeof(Quaternion) && name.Contains("pointer") && name.Contains("rot"))
-                    {
-                        pointerUsage[i] = u.As<Quaternion>();
-                        Log.LogInfo($"Lazer yönü için '{u.name}' kullanılıyor ({node})");
-                        break;
-                    }
-                }
-            }
-
-            Quaternion rot;
-            if (!(pointerUsage[i].HasValue && device.TryGetFeatureValue(pointerUsage[i].Value, out rot)) &&
-                !device.TryGetFeatureValue(CommonUsages.deviceRotation, out rot)) return false;
-            if (!head.TryGetFeatureValue(CommonUsages.deviceRotation, out var headRot) &&
-                !head.TryGetFeatureValue(CommonUsages.centerEyeRotation, out headRot)) return false;
-
-            world = cam.transform.rotation * Quaternion.Inverse(headRot) * rot;
-            return true;
+            h.T = t;
+            h.Grip = grip > 0.7f;
+            h.Trigger = h.Trigger ? trigger > 0.25f : trigger > 0.5f;
+            h.Stick = Mathf.Abs(stick) > 0.2f ? stick : 0f;
         }
 
         // GT'nin düğmelere basmak için kullandığı işaret parmağı ucu collider'ları
         private void FindFingertips(GorillaTagger tagger)
         {
-            if (fingertips != null || Time.time < nextFingertipSearch) return;
+            // FindObjectsOfType pahalı: bulunamazsa birkaç denemeden sonra vazgeç (kare takılmasın)
+            if (fingertips != null || fingertipSearches >= 15 || Time.time < nextFingertipSearch) return;
             nextFingertipSearch = Time.time + 2f;
+            fingertipSearches++;
 
             Transform right = null, left = null;
-            foreach (var indicator in FindObjectsOfType<GorillaTriggerColliderHandIndicator>())
+            foreach (var indicator in FindObjectsByType<GorillaTriggerColliderHandIndicator>(FindObjectsSortMode.None))
             {
                 // Yerel oyuncunun ellerine en yakın olanları al (diğer oyuncularınki değil)
                 var hand = indicator.isLeftHand ? tagger.leftHandTransform : tagger.rightHandTransform;
@@ -405,86 +196,220 @@ namespace GorillaDesktop
             if (tagger == null) return;
             if (palms == null) palms = new[] { tagger.rightHandTransform, tagger.leftHandTransform };
             FindFingertips(tagger);
-            FindIndexBones(tagger);
 
             var vr = IsVR();
             Native.TrySetDpiAware(); // ekran koordinatları ölçeklenmesin (Windows %125 vb.)
-            ReadInputs(tagger, vr, out var toggle, out var keyboard);
+            var toggle = ReadInputs(tagger, vr);
 
-            if (toggle && !prevToggle) SetVisible(!visible, tagger);
+            // Kilitliyken Y ekranı kapatmaz; kapalıysa kilitli yerinde açar
+            if (toggle && !prevToggle && !(visible && locked.Value)) SetVisible(!visible, tagger);
             prevToggle = toggle;
-            UpdateSharing(vr);
 
             if (!visible)
             {
-                EndFrame(keyboard);
+                EndFrame();
                 return;
             }
 
             source.Update();
             if (screenMat.mainTexture != source.Texture) screenMat.mainTexture = source.Texture;
-            UpdateCursorOverlay();
-            if (audioSource != null) audioSource.volume = Mathf.Clamp01(audioVolume.Value);
-
-            // Lazerler: VR'da sadece ayarlardan açıksa; masaüstünde ekran ortası nişan her zaman
-            var lasersOn = !vr || laserEnabled.Value;
-            settings.FollowScreen(screen);
-            for (var i = 0; i < pointerCount; i++)
-            {
-                var p = pointers[i];
-                var fingerBusy = vr && (touchHand == i || FingerNear(i));
-                var aims = lasersOn && !fingerBusy;
-                p.UiButton = aims ? settings.Raycast(p.Origin, p.Dir, out p.UiPoint) : null;
-                p.Hit = aims && p.UiButton == null && RaycastScreen(p.Origin, p.Dir, out p.HitPoint, out p.Uv);
-                p.Record();
-            }
-            for (var i = pointerCount; i < pointers.Length; i++) { pointers[i].UiButton = null; pointers[i].Hit = false; }
 
             UpdateGrab(vr);
             settings.FollowScreen(screen);
             model?.Follow(screen, screenWidth);
+            menu.Follow(screen, screenWidth);
+            menu.Tick();
+            UpdateLaunch();
 
-            // Ayar tuşları: parmakla ya da lazerle tetik
-            fingerHoverA = fingerHoverB = null;
-            if (grabMode == 0)
+            fingerBuffer[0] = Fingertip(0);
+            fingerBuffer[1] = Fingertip(1);
+
+            // Klavye: parmakla ya da klavyeye doğrultulan ışın + tetik ile
+            var onKeyboard = false;
+            if (vr && keyboard.Visible && grabMode == 0)
             {
-                for (var i = 0; i < pointerCount; i++)
+                keyboard.ClearHover();
+                var pressed = keyboard.Touch(fingerBuffer, out var near);
+                if (pressed >= 0) PressFeedback(pressed == 1);
+                onKeyboard = near;
+                for (var i = 0; i < handCount; i++)
                 {
-                    var p = pointers[i];
-                    if (p.UiButton != null && p.Trigger && !p.PrevTrigger) settings.Click(p.UiButton);
-                }
-                if (vr)
-                {
-                    fingerBuffer[0] = Fingertip(0);
-                    fingerBuffer[1] = Fingertip(1);
-                    var clicked = settings.Touch(fingerBuffer, out fingerHoverA, out fingerHoverB);
-                    if (clicked >= 0) PressFeedback(clicked == 1);
+                    var h = hands[i];
+                    if (!TryControllerAim(i == 0 ? XRNode.RightHand : XRNode.LeftHand, out var aim)) { keyboard.HideBeam(i); continue; }
+                    var press = h.Trigger && !h.PrevTrigger;
+                    if (keyboard.Beam(i, h.T.position, aim * Vector3.forward, press))
+                    {
+                        onKeyboard = true;
+                        if (press) PressFeedback(i == 1);
+                    }
                 }
             }
-            settings.SetHover(pointers[0].UiButton, pointers[1].UiButton, fingerHoverA, fingerHoverB);
 
-            DrawLasers(vr, lasersOn);
-            if (grabMode != 0)
+            // Ayar tuşları: parmakla
+            SettingsUi.Button hoverA = null, hoverB = null;
+            if (vr && grabMode == 0)
             {
-                ReleaseLeft(vr);
-                EndFrame(keyboard);
+                var clicked = settings.Touch(fingerBuffer, out hoverA, out hoverB);
+                if (clicked >= 0) PressFeedback(clicked == 1);
+            }
+            settings.SetHover(hoverA, hoverB);
+
+            // Ekrana dokunma: menü açıkken kartlara, değilse bilgisayar ekranına
+            if (vr && grabMode == 0 && !onKeyboard)
+            {
+                if (menu.Visible) UpdateMenuTouch(); else UpdateFingerTouch();
+            }
+            EndFrame();
+        }
+
+        // ---------------------------------------------------------------- ana menü
+
+        private void UpdateMenuTouch()
+        {
+            if (!touchEnabled.Value) return;
+            if (touchHand >= 0)
+            {
+                // Bastıktan sonra parmak çekilene kadar tekrar basmaz
+                var on = FingerOnScreen(touchHand, out _, out var front);
+                if (on && front < ReleaseDistance && front > -0.12f) return;
+                touchHand = -1;
+            }
+
+            Vector2? hover = null;
+            for (var i = 0; i < 2; i++)
+            {
+                var on = FingerOnScreen(i, out var uv, out var front);
+                var cameFromFront = prevFingerFront[i] > PressDepth;
+                prevFingerFront[i] = on ? front : 1f;
+                if (!on || front > HoverDistance || front < -0.12f) continue;
+
+                if (front <= PressDepth && cameFromFront)
+                {
+                    touchHand = i;
+                    PressFeedback(i == 1);
+                    Activate(menu.HitTest(uv));
+                    menu.Hover(null);
+                    return;
+                }
+                if (!hover.HasValue) hover = uv;
+            }
+            menu.Hover(hover);
+        }
+
+        // Menüde bir karta basıldı
+        private void Activate(string id)
+        {
+            if (id == null) return;
+            switch (id)
+            {
+                case HomeMenu.Settings: settings.SetOpen(!settings.Open); return;
+                case HomeMenu.MyScreen: ShowDesktop(); return;
+                case HomeMenu.Plus: menu.Show(HomeMenu.Page.AddApps); return;
+                case HomeMenu.Back: menu.Show(HomeMenu.Page.Home); return;
+            }
+
+            if (menu.Current == HomeMenu.Page.AddApps)
+            {
+                menu.ToggleAdded(id);
                 return;
             }
 
-            // Parmakla basma, lazerden önceliklidir
-            if (!(vr && UpdateFingerTouch())) UpdatePointers(vr, keyboard);
-            EndFrame(keyboard);
+            var app = HomeMenu.HomeApps.Concat(HomeMenu.ExtraApps).FirstOrDefault(a => a.Id == id);
+            if (app == null) return;
+            var monitor = new Native.RECT
+            {
+                Left = source.SourceX, Top = source.SourceY,
+                Right = source.SourceX + source.SourceWidth, Bottom = source.SourceY + source.SourceHeight,
+            };
+            // Pencere hazÄ±r olup sayfa yÃ¼klenene kadar yÃ¼kleme ekranÄ±; sonra uygulamaya geÃ§
+            menu.ShowLoading(app.Id);
+            launchId = app.Id;
+            launchResult = 0;
+            launchReadyAt = 0f;
+            AppLauncher.Open(app.Id, app.Url, monitor, ok => launchResult = ok ? 1 : 2);
         }
 
-        private void EndFrame(bool keyboard)
+        private string launchId;
+        private volatile int launchResult; // 0 bekliyor, 1 aÃ§Ä±ldÄ±, 2 aÃ§Ä±lamadÄ±
+        private float launchReadyAt;
+
+        private void UpdateLaunch()
         {
-            prevKeyboard = keyboard;
-            foreach (var p in pointers)
+            if (!menu.Visible || menu.Current != HomeMenu.Page.Loading || launchId == null) return;
+            if (launchResult == 1)
             {
-                p.PrevTrigger = p.Trigger;
-                p.PrevGrip = p.Grip;
-                p.PrevSecondary = p.Secondary;
+                // Pencere tam ekran; sayfanÄ±n Ã§izilmesi iÃ§in kÄ±sa bir sÃ¼re daha yÃ¼kleme ekranÄ±nda kal
+                if (launchReadyAt == 0f) launchReadyAt = Time.time + 1.5f;
+                else if (Time.time >= launchReadyAt) { launchId = null; ShowDesktop(); }
             }
+            else if (launchResult == 2)
+            {
+                if (launchReadyAt == 0f) { menu.ShowError(launchId); launchReadyAt = Time.time + 2.5f; }
+                else if (Time.time >= launchReadyAt) { launchId = null; GoHome(); }
+            }
+        }
+
+        // Klavyeden yazmadan Ã¶nce: odak oyundaysa yazÄ± oyuna gitmesin, son aÃ§Ä±lan uygulamaya geÃ§ir
+        private void EnsureAppFocus()
+        {
+            var app = AppLauncher.LastWindow;
+            if (app == IntPtr.Zero || !Native.IsWindow(app)) return;
+            var fg = Native.GetForegroundWindow();
+            Native.GetWindowThreadProcessId(fg, out var pid);
+            if (pid == (uint)Process.GetCurrentProcess().Id) Native.ForceForeground(app);
+        }
+
+        private void ShowDesktop()
+        {
+            menu.SetVisible(false);
+            touchHand = -1;
+        }
+
+        private void GoHome()
+        {
+            menu.SetVisible(true);
+            menu.Show(HomeMenu.Page.Home);
+            touchHand = -1;
+        }
+
+        private static readonly List<InputFeatureUsage> usageBuffer = new List<InputFeatureUsage>();
+        private readonly InputFeatureUsage<Quaternion>?[] pointerUsage = new InputFeatureUsage<Quaternion>?[2];
+        private readonly bool[] pointerUsageSearched = new bool[2];
+
+        // Kumandanın dünya uzayındaki nişan dönüşü (parmak animasyonundan etkilenmez).
+        // Takip uzayından dünyaya: kafanın takip dönüşü ile kameranın dünya dönüşü arasındaki fark
+        private bool TryControllerAim(XRNode node, out Quaternion world)
+        {
+            world = Quaternion.identity;
+            var cam = Camera.main;
+            if (cam == null) return false;
+            var device = InputDevices.GetDeviceAtXRNode(node);
+            var head = InputDevices.GetDeviceAtXRNode(XRNode.Head);
+            if (!device.isValid || !head.isValid) return false;
+
+            var i = node == XRNode.RightHand ? 0 : 1;
+            if (!pointerUsageSearched[i] && device.TryGetFeatureUsages(usageBuffer))
+            {
+                pointerUsageSearched[i] = true;
+                foreach (var u in usageBuffer)
+                {
+                    var name = u.name.ToLowerInvariant();
+                    if (u.type == typeof(Quaternion) && name.Contains("pointer") && name.Contains("rot")) { pointerUsage[i] = u.As<Quaternion>(); break; }
+                }
+            }
+
+            Quaternion rot;
+            if (!(pointerUsage[i].HasValue && device.TryGetFeatureValue(pointerUsage[i].Value, out rot)) &&
+                !device.TryGetFeatureValue(CommonUsages.deviceRotation, out rot)) return false;
+            if (!head.TryGetFeatureValue(CommonUsages.deviceRotation, out var headRot) &&
+                !head.TryGetFeatureValue(CommonUsages.centerEyeRotation, out headRot)) return false;
+            world = cam.transform.rotation * Quaternion.Inverse(headRot) * rot;
+            return true;
+        }
+
+        private void EndFrame()
+        {
+            foreach (var h in hands) { h.PrevGrip = h.Grip; h.PrevTrigger = h.Trigger; }
         }
 
         // ---------------------------------------------------------------- parmakla basma (GT düğmeleri gibi)
@@ -501,25 +426,17 @@ namespace GorillaDesktop
             return true;
         }
 
-        private bool FingerNear(int hand)
+        // Parmak yaklaşınca imleç parmağı takip eder; yüzeye önden değince bir kez tıklar.
+        // Tekrar tıklamak için parmak ekrandan çekilmeli
+        private void UpdateFingerTouch()
         {
-            if (!touchEnabled.Value) return false;
-            return FingerOnScreen(hand, out _, out var front) && front < HoverDistance * 2f && front > -0.1f;
-        }
-
-        // Parmak yaklaşınca imleç parmağı takip eder; yüzeye önden değince sol tık, değdiği sürece sürükler.
-        // Parmak kontrolü elindeyse true döner
-        private bool UpdateFingerTouch()
-        {
-            if (!touchEnabled.Value) return false;
+            if (!touchEnabled.Value) return;
 
             if (touchHand >= 0)
             {
-                var on = FingerOnScreen(touchHand, out var uv, out var front);
-                // Tıklandı; parmak ekrandan çekilene kadar tekrar tıklamaz
-                if (on && front < ReleaseDistance && front > -0.12f) return true;
+                var on = FingerOnScreen(touchHand, out _, out var front);
+                if (on && front < ReleaseDistance && front > -0.12f) return;
                 touchHand = -1;
-                return false;
             }
 
             var hovering = false;
@@ -531,19 +448,18 @@ namespace GorillaDesktop
                 if (!on || front > HoverDistance || front < -0.12f) continue;
 
                 var target = ToDesktop(uv);
-                if (front <= PressDepth && cameFromFront && !leftDown)
+                if (front <= PressDepth && cameFromFront)
                 {
                     touchHand = i;
-                    ClickAt(target, true);
+                    ClickAt(target);
                     PressFeedback(i == 1);
-                    return true;
+                    return;
                 }
 
                 // Basmadan önce imleç parmağın olduğu yeri göstersin
-                if (!hovering && !leftDown) MoveCursor(target);
+                if (!hovering) MoveCursor(target);
                 hovering = true;
             }
-            return hovering;
         }
 
         // GT düğmesine basmış gibi: titreşim + tık sesi
@@ -559,89 +475,30 @@ namespace GorillaDesktop
             catch { }
         }
 
-        // ---------------------------------------------------------------- lazer / klavye ile tıklama
-
-        private const float PrePressSeconds = 0.06f;
-
-        // Her basış tek bir tık: ne kadar basılı tutulursa tutulsun basılı kalmaz, sürüklenmez
-        private void ClickAt(Vector2Int target, bool vr)
+        // Tek tık: basılı kalmaz, sürüklenmez
+        private void ClickAt(Vector2Int target)
         {
             lastCursor = target;
             Native.MouseAt(target.x, target.y, Native.MOUSEEVENTF_LEFTDOWN);
             Native.MouseAt(target.x, target.y, Native.MOUSEEVENTF_LEFTUP);
-            if (!vr && refocusGame.Value && GameWindow() != IntPtr.Zero)
-                Native.SetForegroundWindow(GameWindow());
-        }
-
-        private void UpdatePointers(bool vr, bool keyboard)
-        {
-            for (var i = 0; i < pointerCount; i++)
-            {
-                var p = pointers[i];
-                if (!p.Hit) continue;
-                // Basma hareketi eli oynatır: basmadan hemen önce nişan alınan nokta
-                var target = ToDesktop(p.UvAgo(PrePressSeconds));
-
-                // Tetiğe basılan el aktif olur ve bir kez tıklar
-                if (p.Trigger && !p.PrevTrigger)
-                {
-                    activePointer = i;
-                    ClickAt(target, vr);
-                    if (vr) PressFeedback(i == 1);
-                }
-
-                if (p.Secondary && !p.PrevSecondary)
-                {
-                    activePointer = i;
-                    if (vr) PressFeedback(i == 1);
-                    Native.MouseAt(target.x, target.y, Native.MOUSEEVENTF_RIGHTDOWN);
-                    Native.MouseAt(target.x, target.y, Native.MOUSEEVENTF_RIGHTUP);
-                }
-            }
-
-            // İmleç aktif eli takip eder; aktif el ekranda değilse ekrana bakan diğer el
-            if (activePointer >= pointerCount || !pointers[activePointer].Hit)
-                for (var i = 0; i < pointerCount; i++)
-                    if (pointers[i].Hit) { activePointer = i; break; }
-
-            var a = pointers[activePointer < pointerCount ? activePointer : 0];
-            if (!a.Hit) return;
-            var aim = ToDesktop(a.Uv);
-
-            // Masaüstünde sürekli taşımıyoruz, yoksa WalkSim fare hareketini kamera dönüşü sanar
-            if (vr && !leftDown) MoveCursor(aim);
-
-            if (keyboard && !prevKeyboard) OpenOnScreenKeyboard();
-
-            if (Mathf.Abs(a.Stick) > 0.01f)
-            {
-                scrollAccum += a.Stick * scrollSpeed.Value * 120f * Time.deltaTime;
-                var delta = (int)scrollAccum;
-                if (delta != 0)
-                {
-                    Native.MouseAt(aim.x, aim.y, Native.MOUSEEVENTF_WHEEL, delta);
-                    scrollAccum -= delta;
-                }
-            }
-            else scrollAccum = 0f;
         }
 
         // ---------------------------------------------------------------- taşıma / büyütme
 
-        // Grip: ekranı tut. Eli ekranın yakınındayken (ya da lazer ekrandayken) basınca yakalar.
-        // Tek elle taşı, iki elle tutunca (Meta'daki gibi) taşı + büyüt/küçült
+        // Grip: ekranı tut (el ekranın yanındayken). Tek elle taşı, iki elle tutup büyüt/küçült.
+        // Kilitliyken ekran yerinden oynamaz
         private void UpdateGrab(bool vr)
         {
             var changed = false;
-            for (var i = 0; i < pointerCount; i++)
+            for (var i = 0; i < handCount; i++)
             {
-                var p = pointers[i];
+                var h = hands[i];
                 var held = grabbing.Contains(i);
-                if (p.Grip && !p.PrevGrip && !held && (!vr || p.Hit || PalmNearScreen(i))) { grabbing.Add(i); changed = true; }
-                else if (!p.Grip && held) { grabbing.Remove(i); changed = true; }
+                if (h.Grip && !h.PrevGrip && !held && !locked.Value && (!vr || PalmNearScreen(i))) { grabbing.Add(i); changed = true; }
+                else if ((!h.Grip || locked.Value) && held) { grabbing.Remove(i); changed = true; }
             }
             for (var i = grabbing.Count - 1; i >= 0; i--)
-                if (grabbing[i] >= pointerCount) { grabbing.RemoveAt(i); changed = true; }
+                if (grabbing[i] >= handCount) { grabbing.RemoveAt(i); changed = true; }
 
             var mode = Math.Min(grabbing.Count, 2);
             if (changed || mode != grabMode) BeginGrab(mode);
@@ -649,16 +506,17 @@ namespace GorillaDesktop
 
             if (mode == 1)
             {
-                var p = pointers[grabbing[0]];
+                var h = hands[grabbing[0]];
                 // Tutarken joystick ileri/geri = ekranı uzaklaştır/yaklaştır
-                screen.position = p.T.TransformPoint(grabLocalPos) + p.Dir * (p.Stick * 1.5f * Time.deltaTime);
-                screen.rotation = p.T.rotation * grabLocalRot;
-                grabLocalPos = p.T.InverseTransformPoint(screen.position);
+                var away = (screen.position - h.T.position).normalized;
+                screen.position = h.T.TransformPoint(grabLocalPos) + away * (h.Stick * 1.5f * Time.deltaTime);
+                screen.rotation = h.T.rotation * grabLocalRot;
+                grabLocalPos = h.T.InverseTransformPoint(screen.position);
             }
             else if (mode == 2)
             {
-                var a = pointers[grabbing[0]].T.position;
-                var b = pointers[grabbing[1]].T.position;
+                var a = hands[grabbing[0]].T.position;
+                var b = hands[grabbing[1]].T.position;
                 var frame = HandsFrame(a, b);
                 screen.position = (a + b) * 0.5f + frame * grabLocalPos;
                 screen.rotation = frame * grabLocalRot;
@@ -667,7 +525,7 @@ namespace GorillaDesktop
             }
         }
 
-        // Avuç ekranın (ya da kasasının) yakınında mı
+        // Avuç ekranın (ya da çerçevesinin) yakınında mı
         private bool PalmNearScreen(int hand)
         {
             var p = palms[hand].position;
@@ -682,14 +540,14 @@ namespace GorillaDesktop
         {
             if (mode == 1)
             {
-                var t = pointers[grabbing[0]].T;
+                var t = hands[grabbing[0]].T;
                 grabLocalPos = t.InverseTransformPoint(screen.position);
                 grabLocalRot = Quaternion.Inverse(t.rotation) * screen.rotation;
             }
             else if (mode == 2)
             {
-                var a = pointers[grabbing[0]].T.position;
-                var b = pointers[grabbing[1]].T.position;
+                var a = hands[grabbing[0]].T.position;
+                var b = hands[grabbing[1]].T.position;
                 var frame = HandsFrame(a, b);
                 grabLocalPos = Quaternion.Inverse(frame) * (screen.position - (a + b) * 0.5f);
                 grabLocalRot = Quaternion.Inverse(frame) * screen.rotation;
@@ -714,6 +572,39 @@ namespace GorillaDesktop
             screen.localScale = new Vector3(width, width * screenAspect, 1f);
         }
 
+        // ---------------------------------------------------------------- kilit
+
+        private void ToggleLock()
+        {
+            locked.Value = !locked.Value;
+            if (locked.Value)
+            {
+                // Kilitlendiği yeri kaydet: sonraki açılışta ekran burada çıkar
+                var p = screen.position;
+                var r = screen.rotation;
+                lockedPose.Value = string.Join(";", new[] { p.x, p.y, p.z, r.x, r.y, r.z, r.w, screenWidth }
+                    .Select(v => v.ToString("0.###", CultureInfo.InvariantCulture)));
+                grabbing.Clear();
+                grabMode = 0;
+            }
+        }
+
+        private bool TryGetLockedPose(out Vector3 position, out Quaternion rotation, out float width)
+        {
+            position = default;
+            rotation = Quaternion.identity;
+            width = screenWidthMeters.Value;
+            var parts = (lockedPose.Value ?? "").Split(';');
+            if (parts.Length < 8) return false;
+            var v = new float[8];
+            for (var i = 0; i < 8; i++)
+                if (!float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out v[i])) return false;
+            position = new Vector3(v[0], v[1], v[2]);
+            rotation = new Quaternion(v[3], v[4], v[5], v[6]);
+            width = Mathf.Clamp(v[7], 0.3f, 8f);
+            return true;
+        }
+
         // ---------------------------------------------------------------- aç / kapa
 
         private void SetVisible(bool show, GorillaTagger tagger)
@@ -727,17 +618,19 @@ namespace GorillaDesktop
             {
                 Application.runInBackground = true;
                 source.Start();
-                StartAudio();
-                PlaceInFront(tagger);
+                if (locked.Value && TryGetLockedPose(out var pos, out var rot, out var width))
+                {
+                    screen.SetPositionAndRotation(pos, rot);
+                    SetScreenWidth(width);
+                }
+                else PlaceInFront(tagger);
+                // VR'da açılışta ana menü; WalkSim'de menüye dokunulamadığı için doğrudan bilgisayar ekranı
+                if (vr) GoHome(); else ShowDesktop();
             }
             else
             {
-                // Ekranını kapatan yayıncı yayını da bırakır
-                share.Release();
-                StopPublisher();
                 source.Stop();
-                StopAudio();
-                ReleaseLeft(true);
+                keyboard.SetVisible(false);
                 grabbing.Clear();
                 grabMode = 0;
             }
@@ -753,40 +646,11 @@ namespace GorillaDesktop
             screen.rotation = Quaternion.LookRotation(flatForward, Vector3.up);
         }
 
-        private void StartAudio()
-        {
-            if (!audioEnabled.Value) return;
-            if (audioAutoRoute.Value) router.Route(audioDevice.Value);
-
-            if (audio == null) audio = new AudioLoopback(audioDevice.Value);
-            audio.Publisher = publisher;
-            audio.Start();
-
-            if (audioSource == null)
-            {
-                var player = screen.gameObject.AddComponent<AudioPlayer>();
-                audioSource = player.Setup(audioVolume.Value, audioMaxDistance.Value);
-                player.Source = audio;
-            }
-            audioSource.Play();
-        }
-
-        private void StopAudio()
-        {
-            if (audioSource != null) audioSource.Stop();
-            audio?.Stop();
-            router.RestoreAsync();
-        }
-
         // ---------------------------------------------------------------- kurulum
 
         private IntPtr GameWindow()
         {
-            if (gameWindow == IntPtr.Zero)
-            {
-                try { gameWindow = Process.GetCurrentProcess().MainWindowHandle; } catch { }
-            }
-            return gameWindow;
+            try { return Process.GetCurrentProcess().MainWindowHandle; } catch { return IntPtr.Zero; }
         }
 
         private Native.RECT PickMonitor(bool vr)
@@ -829,16 +693,11 @@ namespace GorillaDesktop
             source.Stop();
             source.Dispose();
             source = CreateSource(IsVR());
-            source.Publisher = publisher;
             screenAspect = source.SourceHeight / (float)source.SourceWidth;
             SetScreenWidth(screenWidth);
             screenMat.mainTexture = source.Texture;
-
-            if (cursor != null) Destroy(cursor.gameObject);
-            cursor = null;
-            if (!source.DrawsCursor) BuildCursor();
             RebuildModel();
-
+            menu.SetAspect(screenAspect);
             if (visible) source.Start();
         }
 
@@ -851,7 +710,7 @@ namespace GorillaDesktop
 
         private void BuildScreen(bool vr)
         {
-            font = Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Arial" }, 64);
+            font = Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Segoe UI Symbol", "Arial" }, 64); // sembol yazı tipi: ⌫ ⇧ ▼ için
             source = CreateSource(vr);
 
             screenAspect = source.SourceHeight / (float)source.SourceWidth;
@@ -877,62 +736,28 @@ namespace GorillaDesktop
             screenMat.mainTexture = source.Texture;
             quad.GetComponent<Renderer>().material = screenMat;
 
-            // GPU yakalama imleci içermez; oyun içinde ok şeklinde çiziyoruz
-            if (!source.DrawsCursor) BuildCursor();
             RebuildModel();
             BuildSettings();
 
-            // Her el için bir lazer ve uç noktası
-            var laserMat = MakeMaterial(new Color(0.2f, 0.8f, 1f));
-            var dotMat = MakeMaterial(Color.white);
-            for (var i = 0; i < lasers.Length; i++)
-            {
-                var laserObj = new GameObject("Laser" + i);
-                laserObj.transform.SetParent(screenRoot.transform, false);
-                var laser = laserObj.AddComponent<LineRenderer>();
-                laser.positionCount = 2;
-                laser.startWidth = 0.004f;
-                laser.endWidth = 0.002f;
-                laser.useWorldSpace = true;
-                laser.material = laserMat;
-                laser.enabled = false;
-                lasers[i] = laser;
-
-                var dot = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                Destroy(dot.GetComponent<Collider>());
-                dot.name = "LaserDot" + i;
-                laserDots[i] = dot.transform;
-                laserDots[i].SetParent(screenRoot.transform, false);
-                laserDots[i].localScale = Vector3.one * 0.012f;
-                dot.GetComponent<Renderer>().material = dotMat;
-                dot.SetActive(false);
-            }
+            menu = new HomeMenu(screenRoot.transform, MakeMaterial, font, addedApps);
+            menu.SetAspect(screenAspect);
+            keyboard = new VrKeyboard(screenRoot.transform, MakeMaterial, font) { BeforeType = EnsureAppFocus };
+            settings.AddSideButton("⌂", 1, GoHome);
+            settings.AddSideButton("⌨", 2, () => keyboard.Toggle(Camera.main != null ? Camera.main.transform : GorillaTagger.Instance.headCollider.transform));
         }
 
         private void BuildSettings()
         {
             settings = new SettingsUi(screenRoot.transform, MakeMaterial, font);
-            settings.AddHeader("GTV  Ayarlar");
-            settings.AddStepper("Monitör", MonitorLabel, () => CycleMonitor(-1), () => CycleMonitor(1));
-            settings.AddStepper("FPS", () => captureFps.Value.ToString(),
-                () => CycleFps(-1), () => CycleFps(1));
-            settings.AddToggle("Ses", () => audioEnabled.Value, () =>
-            {
-                audioEnabled.Value = !audioEnabled.Value;
-                if (audioEnabled.Value) StartAudio(); else StopAudio();
-            });
-            settings.AddStepper("Ses seviyesi", () => $"%{Mathf.RoundToInt(audioVolume.Value * 100)}",
-                () => audioVolume.Value = Mathf.Clamp01(audioVolume.Value - 0.1f),
-                () => audioVolume.Value = Mathf.Clamp01(audioVolume.Value + 0.1f));
-            settings.AddToggle("Parmakla dokunma", () => touchEnabled.Value, () => touchEnabled.Value = !touchEnabled.Value);
-            settings.AddToggle("Uzaktan lazer", () => laserEnabled.Value, () => laserEnabled.Value = !laserEnabled.Value);
-            settings.AddToggle("Tık sesi", () => pressSound.Value, () => pressSound.Value = !pressSound.Value);
-            settings.AddToggle("GTV logosu", () => showLogo.Value, () => { showLogo.Value = !showLogo.Value; RebuildModel(); });
-            settings.AddToggle("Arkadaşlarla paylaş", () => publisher != null, ToggleShare);
-            settings.AddInfo("Paylaşım", ShareStatus);
-            settings.AddAction("Ortak ekranın yeri burası olsun", SaveSharePlace);
-            settings.AddAction("Ekranı önüme getir", ResetScreenPose);
-            settings.AddInfo("Yakalama", () => $"{(source is GpuCapture ? "GPU" : "Yedek")}  {source.Width}x{source.Height}");
+            settings.AddHeader("GTV  Settings");
+            settings.AddToggle("Lock screen", () => locked.Value, ToggleLock);
+            settings.AddStepper("Monitor", MonitorLabel, () => CycleMonitor(-1), () => CycleMonitor(1));
+            settings.AddStepper("FPS", () => captureFps.Value.ToString(), () => CycleFps(-1), () => CycleFps(1));
+            settings.AddToggle("Touch", () => touchEnabled.Value, () => touchEnabled.Value = !touchEnabled.Value);
+            settings.AddToggle("Click sound", () => pressSound.Value, () => pressSound.Value = !pressSound.Value);
+            settings.AddToggle("GTV logo", () => showLogo.Value, () => { showLogo.Value = !showLogo.Value; RebuildModel(); });
+            settings.AddAction("Bring screen to me", ResetScreenPose);
+            settings.AddInfo("Capture", () => $"{(source is GpuCapture ? "GPU" : "Fallback")}  {source.Width}x{source.Height}");
             settings.Finish();
         }
 
@@ -951,12 +776,12 @@ namespace GorillaDesktop
         private string MonitorLabel()
         {
             var monitors = Native.Monitors();
-            if (monitorIndex.Value < 0 || monitorIndex.Value >= monitors.Count) return "Otomatik";
+            if (monitorIndex.Value < 0 || monitorIndex.Value >= monitors.Count) return "Auto";
             var r = monitors[monitorIndex.Value].rect;
             return $"{monitorIndex.Value + 1}/{monitors.Count}  {r.Width}x{r.Height}";
         }
 
-        // Otomatik -> 1 -> 2 -> ... -> Otomatik
+        // Auto -> 1 -> 2 -> ... -> Auto
         private void CycleMonitor(int dir)
         {
             var count = Native.Monitors().Count;
@@ -967,59 +792,13 @@ namespace GorillaDesktop
             RebuildSource();
         }
 
+        // Kilitliyken ekran yerinde kalır
         private void ResetScreenPose()
         {
+            if (locked.Value) return;
             SetScreenWidth(screenWidthMeters.Value);
             var tagger = GorillaTagger.Instance;
             if (tagger != null) PlaceInFront(tagger);
-        }
-
-        private void BuildCursor()
-        {
-            cursor = new GameObject("Cursor").transform;
-            cursor.SetParent(screen, false);
-            // Piksel biriminde çizilen oku monitör pikseline ölçekle
-            var k = Mathf.Max(1.5f, source.SourceWidth / 1000f) * cursorSize.Value;
-            cursor.localScale = new Vector3(k / source.SourceWidth, k / source.SourceHeight, 1f);
-
-            AddArrow("Outline", 1.35f, 0.0015f, Color.black);
-            AddArrow("Fill", 1f, 0.0025f, Color.white);
-        }
-
-        // Klasik fare oku; (0,0) uç noktası, y aşağı doğru piksel
-        private void AddArrow(string name, float scale, float zOffset, Color color)
-        {
-            Vector2[] pts = { new Vector2(0, 0), new Vector2(0, 17), new Vector2(4, 13), new Vector2(7, 20), new Vector2(9, 19), new Vector2(6, 12), new Vector2(12, 12) };
-            var center = new Vector2(4f, 10f);
-            var verts = new Vector3[pts.Length];
-            for (var i = 0; i < pts.Length; i++)
-            {
-                var p = center + (pts[i] - center) * scale - new Vector2(0f, (scale - 1f) * 3f);
-                verts[i] = new Vector3(p.x, -p.y, -zOffset); // ekranın önü -Z
-            }
-            int[] tris = { 0, 1, 2, 0, 2, 5, 0, 5, 6, 2, 3, 4, 2, 4, 5 };
-            var both = new int[tris.Length * 2];
-            for (var i = 0; i < tris.Length; i += 3)
-            {
-                both[i] = tris[i]; both[i + 1] = tris[i + 1]; both[i + 2] = tris[i + 2];
-                both[tris.Length + i] = tris[i]; both[tris.Length + i + 1] = tris[i + 2]; both[tris.Length + i + 2] = tris[i + 1];
-            }
-
-            var go = new GameObject(name);
-            go.transform.SetParent(cursor, false);
-            go.AddComponent<MeshFilter>().mesh = new Mesh { vertices = verts, triangles = both };
-            go.AddComponent<MeshRenderer>().material = MakeMaterial(color);
-        }
-
-        private void UpdateCursorOverlay()
-        {
-            if (cursor == null) return;
-            if (!Native.GetCursorPos(out var p)) return;
-            var x = (p.X - source.SourceX) / (float)source.SourceWidth;
-            var y = (p.Y - source.SourceY) / (float)source.SourceHeight;
-            var inside = x >= 0f && x <= 1f && y >= 0f && y <= 1f;
-            if (cursor.gameObject.activeSelf != inside) cursor.gameObject.SetActive(inside);
-            if (inside) cursor.localPosition = new Vector3(x - 0.5f, 0.5f - y, 0f);
         }
 
         private static Material MakeMaterial(Color color)
@@ -1033,50 +812,6 @@ namespace GorillaDesktop
         }
 
         // ---------------------------------------------------------------- yardımcılar
-
-        // Ekran düzlemiyle ışın kesişimi; uv: (0,0) sol üst, (1,1) sağ alt
-        private bool RaycastScreen(Vector3 origin, Vector3 dir, out Vector3 point, out Vector2 uv)
-        {
-            point = default;
-            uv = default;
-            // Ekranın arkasından tıklanmasın
-            if (Vector3.Dot(origin - screen.position, -screen.forward) <= 0f) return false;
-            var plane = new Plane(-screen.forward, screen.position);
-            if (!plane.Raycast(new Ray(origin, dir), out var dist) || dist > 20f) return false;
-
-            point = origin + dir * dist;
-            var local = screen.InverseTransformPoint(point);
-            if (Mathf.Abs(local.x) > 0.5f || Mathf.Abs(local.y) > 0.5f) return false;
-
-            uv = new Vector2(local.x + 0.5f, 0.5f - local.y);
-            return true;
-        }
-
-        // Lazer sadece ucu ekrana/ayar tuşuna değerken (ya da ekranı tutarken) görünür
-        private void DrawLasers(bool vr, bool lasersOn)
-        {
-            for (var i = 0; i < lasers.Length; i++)
-            {
-                var p = pointers[i];
-                var active = lasersOn && i < pointerCount;
-                var held = active && grabbing.Contains(i) && p.Hit;
-                var hit = active && (p.Hit || p.UiButton != null);
-                var end = p.Hit ? p.HitPoint : p.UiPoint;
-
-                // Masaüstünde lazer kameranın içinden çıkar; sadece nokta göster
-                var showLine = vr && (hit || held);
-                if (lasers[i].enabled != showLine) lasers[i].enabled = showLine;
-                if (showLine)
-                {
-                    lasers[i].SetPosition(0, p.Origin);
-                    lasers[i].SetPosition(1, end);
-                }
-
-                var dot = laserDots[i].gameObject;
-                if (dot.activeSelf != hit) dot.SetActive(hit);
-                if (hit) laserDots[i].position = end - screen.forward * 0.006f;
-            }
-        }
 
         private Vector2Int ToDesktop(Vector2 uv)
         {
@@ -1092,215 +827,10 @@ namespace GorillaDesktop
             Native.SetCursorPos(target.x, target.y);
         }
 
-        private void ReleaseLeft(bool vr)
-        {
-            if (!leftDown) return;
-            Native.Mouse(Native.MOUSEEVENTF_LEFTUP);
-            leftDown = false;
-            clickOwner = -1;
-            touchHand = -1;
-
-            if (!vr && refocusGame.Value && GameWindow() != IntPtr.Zero)
-                Native.SetForegroundWindow(GameWindow());
-        }
-
-        private static void OpenOnScreenKeyboard()
-        {
-            try { Process.Start(new ProcessStartInfo("osk.exe") { UseShellExecute = true }); }
-            catch (Exception e) { Log.LogWarning("Ekran klavyesi açılamadı: " + e.Message); }
-        }
-
-        // ---------------------------------------------------------------- arkadaşlarla paylaşım
-
-        private bool ShareConfigured => !string.IsNullOrWhiteSpace(shareServer.Value);
-
-        private void ToggleShare()
-        {
-            shareNotice = "";
-            if (publisher != null || share.Owner == share.MyActor && share.Owner != 0)
-            {
-                share.Release();
-                StopPublisher();
-                return;
-            }
-            if (!ShareConfigured) { shareNotice = "Sunucu ayarlanmamış"; return; }
-            if (!share.InAllowedRoom) { shareNotice = "Modlu lobide değilsin"; return; }
-            if (share.Owner != 0) { shareNotice = share.OwnerName + " zaten yayında"; return; }
-            MoveToSharePlace(); // sabit yer kaydedildiyse ekranım oraya geçer
-            if (!share.TryClaim(screen, screenWidth)) shareNotice = "Alınamadı";
-            else shareNotice = "Alınıyor...";
-        }
-
-        private string ShareStatus()
-        {
-            if (!ShareConfigured) return "Sunucu ayarlanmamış";
-            if (!share.InRoom) return "Lobide değilsin";
-            if (!share.InAllowedRoom) return "Modlu lobide değilsin";
-            if (publisher != null) return publisher.Status == "Yayında" ? $"Yayındasın · {publisher.Viewers} izleyici" : publisher.Status;
-            if (shareNotice.Length > 0) return shareNotice;
-            var owner = share.Owner;
-            return owner == 0 ? "Ekran boş" : share.OwnerName + " yayında";
-        }
-
-        // Her kare: lobideki ortak ekran durumuna göre yayıncı/izleyici bağlantılarını aç/kapat
-        private void UpdateSharing(bool vr)
-        {
-            var allowed = ShareConfigured && share.InAllowedRoom;
-            var owner = allowed ? share.Owner : 0;
-            var me = share.MyActor;
-
-            // Yayıncı: ekran bende ve kendi ekranım açık
-            if (owner != 0 && owner == me && visible)
-            {
-                if (publisher == null) StartPublisher();
-                shareNotice = "";
-                if (Time.time >= nextPoseSync)
-                {
-                    nextPoseSync = Time.time + 0.3f;
-                    share.SyncPose(screen, screenWidth);
-                }
-            }
-            else if (publisher != null)
-            {
-                StopPublisher();
-                if (owner == me) share.Release(); // ekranımı kapattım
-            }
-
-            // İzleyici: ekran başkasında
-            Vector3 pos = default;
-            Quaternion rot = Quaternion.identity;
-            float width = 0f;
-            var watching = owner != 0 && owner != me && share.TryGetPose(out pos, out rot, out width);
-            if (watching)
-            {
-                if (viewer == null || viewerOwner != owner)
-                {
-                    viewer?.Dispose();
-                    viewerOwner = owner;
-                    viewer = new StreamViewer(shareServer.Value, shareKey.Value, StreamConnection.ChannelId(share.RoomName, owner, shareKey.Value));
-                    Log.LogInfo($"Ortak ekran izleniyor: {share.OwnerName}");
-                }
-                EnsureSharedView().SetVolume(audioVolume.Value);
-                sharedView.Show(pos, rot, width, share.OwnerName, viewer);
-            }
-            else if (viewer != null)
-            {
-                viewer.Dispose();
-                viewer = null;
-                viewerOwner = 0;
-            }
-
-            // Kimse yayında değil ve sabit bir yer kaydedilmiş: orada boş ekran, dokunan alır
-            var idle = allowed && owner == 0 && publisher == null && TryGetSharePlace(out pos, out rot, out width);
-            if (idle)
-            {
-                EnsureSharedView().ShowIdle(pos, rot, width);
-                if (vr && fingertips != null && sharedView.Touched(fingertips))
-                {
-                    PressFeedback(false);
-                    ClaimAtPlace();
-                }
-            }
-
-            if (!watching && !idle) sharedView?.Hide();
-
-            // Panel açıksa durum yazısını güncel tut
-            if (settings != null && settings.Open && Time.time >= nextStatusRefresh)
-            {
-                nextStatusRefresh = Time.time + 1f;
-                settings.Refresh();
-            }
-        }
-
-        private float nextStatusRefresh;
-
-        private SharedScreen EnsureSharedView()
-        {
-            if (sharedView != null) return sharedView;
-            if (font == null) font = Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Arial" }, 64);
-            sharedView = new SharedScreen(MakeMaterial, font, null, audioVolume.Value, audioMaxDistance.Value, showLogo.Value);
-            return sharedView;
-        }
-
-        // Kendi ekranımın şu anki yerini ortak ekranın sabit yeri olarak kaydet
-        private void SaveSharePlace()
-        {
-            var p = screen.position;
-            var r = screen.rotation;
-            var ci = System.Globalization.CultureInfo.InvariantCulture;
-            sharePlace.Value = string.Join(";", new[] { p.x, p.y, p.z, r.x, r.y, r.z, r.w, screenWidth }
-                .Select(v => v.ToString("0.###", ci)));
-            shareNotice = "Yer kaydedildi";
-            Log.LogInfo("Ortak ekranın yeri kaydedildi: " + sharePlace.Value);
-        }
-
-        private bool TryGetSharePlace(out Vector3 position, out Quaternion rotation, out float width)
-        {
-            position = default;
-            rotation = Quaternion.identity;
-            width = 1.6f;
-            var parts = (sharePlace.Value ?? "").Split(';');
-            if (parts.Length < 8) return false;
-            var v = new float[8];
-            var ci = System.Globalization.CultureInfo.InvariantCulture;
-            for (var i = 0; i < 8; i++)
-                if (!float.TryParse(parts[i], System.Globalization.NumberStyles.Float, ci, out v[i])) return false;
-            position = new Vector3(v[0], v[1], v[2]);
-            rotation = new Quaternion(v[3], v[4], v[5], v[6]);
-            width = Mathf.Clamp(v[7], 0.3f, 8f);
-            return true;
-        }
-
-        // Sabit yerdeki boş ekrana dokunuldu: kendi ekranımı orada aç ve yayını al
-        private void ClaimAtPlace()
-        {
-            var tagger = GorillaTagger.Instance;
-            if (tagger == null) return;
-            if (!visible) SetVisible(true, tagger);
-            MoveToSharePlace();
-            shareNotice = share.TryClaim(screen, screenWidth) ? "Alınıyor..." : "Alınamadı";
-        }
-
-        private void MoveToSharePlace()
-        {
-            if (!TryGetSharePlace(out var pos, out var rot, out var width)) return;
-            screen.SetPositionAndRotation(pos, rot);
-            SetScreenWidth(width);
-        }
-
-        private void StartPublisher()
-        {
-            var channel = StreamConnection.ChannelId(share.RoomName, share.MyActor, shareKey.Value);
-            publisher = new StreamPublisher(shareServer.Value, shareKey.Value, channel,
-                Mathf.Clamp(shareQuality.Value, 0.2f, 0.95f), Mathf.Clamp(shareFps.Value, 5, 30));
-            source.Publisher = publisher;
-            if (audio != null) audio.Publisher = publisher;
-            Log.LogInfo("Arkadaşlarla paylaşım başladı");
-            settings?.Refresh();
-        }
-
-        private void StopPublisher()
-        {
-            if (publisher == null) return;
-            if (source != null) source.Publisher = null;
-            if (audio != null) audio.Publisher = null;
-            publisher.Dispose();
-            publisher = null;
-            Log.LogInfo("Arkadaşlarla paylaşım bitti");
-            settings?.Refresh();
-        }
-
         private void Cleanup()
         {
-            try { share?.Release(); } catch { }
-            StopPublisher();
-            viewer?.Dispose();
-            viewer = null;
-            ReleaseLeft(true);
             source?.Dispose();
             source = null;
-            audio?.Dispose();
-            router?.Restore();
         }
 
         private void OnDestroy() => Cleanup();

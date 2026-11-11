@@ -28,6 +28,85 @@ namespace GorillaDesktop
         public struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; }
 
         public delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdc, ref RECT rect, IntPtr data);
+        public delegate bool WindowEnumProc(IntPtr hwnd, IntPtr data);
+
+        // ---- klavye (SendInput) ve pencere yönetimi
+
+        public const uint INPUT_KEYBOARD = 1;
+        public const uint KEYEVENTF_KEYUP = 0x2, KEYEVENTF_UNICODE = 0x4;
+        public const ushort VK_RETURN = 0x0D, VK_MENU = 0x12, VK_LWIN = 0x5B, VK_F11 = 0x7A, VK_BACK = 0x08;
+        public const int GWL_STYLE = -16;
+        public const long WS_CAPTION = 0x00C00000;
+        public const int SW_RESTORE = 9;
+        public const uint SWP_SHOWWINDOW = 0x40;
+        public const uint WM_CLOSE = 0x10;
+
+        // 64-bit INPUT yapısı 40 bayt; klavye alanları birleşimin içinde 8. bayttan başlar
+        [StructLayout(LayoutKind.Explicit, Size = 40)]
+        public struct KEYINPUT
+        {
+            [FieldOffset(0)] public uint type;
+            [FieldOffset(8)] public ushort wVk;
+            [FieldOffset(10)] public ushort wScan;
+            [FieldOffset(12)] public uint dwFlags;
+            [FieldOffset(16)] public uint time;
+            [FieldOffset(24)] public IntPtr dwExtraInfo;
+        }
+
+        [DllImport("user32.dll", EntryPoint = "SendInput")] private static extern uint SendKeys(uint count, KEYINPUT[] inputs, int size);
+        [DllImport("user32.dll")] public static extern bool EnumWindows(WindowEnumProc proc, IntPtr data);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder name, int max);
+        [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hwnd);
+        [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
+        [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
+        [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
+        [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+        [DllImport("user32.dll")] public static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
+        [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int w, int h, uint flags);
+        [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int cmd);
+        [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hwnd);
+        [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
+        [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+        [DllImport("user32.dll")] public static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
+        public const long WS_THICKFRAME = 0x00040000;
+        public const uint SWP_FRAMECHANGED = 0x20;
+
+        private static KEYINPUT Key(ushort vk, ushort scan, uint flags) =>
+            new KEYINPUT { type = INPUT_KEYBOARD, wVk = vk, wScan = scan, dwFlags = flags };
+
+        public static void KeyTap(ushort vk)
+        {
+            SendKeys(2, new[] { Key(vk, 0, 0), Key(vk, 0, KEYEVENTF_KEYUP) }, Marshal.SizeOf<KEYINPUT>());
+        }
+
+        // Win+H: Windows sesle yazma
+        public static void KeyCombo(ushort modifier, ushort vk)
+        {
+            SendKeys(4, new[] { Key(modifier, 0, 0), Key(vk, 0, 0), Key(vk, 0, KEYEVENTF_KEYUP), Key(modifier, 0, KEYEVENTF_KEYUP) }, Marshal.SizeOf<KEYINPUT>());
+        }
+
+        // Metni klavye düzeninden bağımsız (Türkçe karakterler dahil) odaktaki pencereye yaz
+        public static void TypeText(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            var inputs = new KEYINPUT[text.Length * 2];
+            for (var i = 0; i < text.Length; i++)
+            {
+                inputs[i * 2] = Key(0, text[i], KEYEVENTF_UNICODE);
+                inputs[i * 2 + 1] = Key(0, text[i], KEYEVENTF_UNICODE | KEYEVENTF_KEYUP);
+            }
+            SendKeys((uint)inputs.Length, inputs, Marshal.SizeOf<KEYINPUT>());
+        }
+
+        // Windows, arka plandaki bir işlemin pencereyi öne almasını engeller; Alt'a basılmış gibi yapmak bunu açar
+        public static void ForceForeground(IntPtr hwnd)
+        {
+            if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
+            KeyTap(VK_MENU);
+            SetForegroundWindow(hwnd);
+            BringWindowToTop(hwnd);
+        }
 
         [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
         [DllImport("user32.dll")] public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO info);

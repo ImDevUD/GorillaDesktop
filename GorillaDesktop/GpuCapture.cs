@@ -23,13 +23,6 @@ namespace GorillaDesktop
         public int Height => SourceHeight;
         public bool DrawsCursor => false;
         public Texture Texture => unityTexture;
-        public StreamPublisher Publisher { get => publisher; set => publisher = value; }
-
-        // Yayın için küçültülmüş kareyi işlemciye okumak (sadece paylaşım açıkken)
-        private const int StreamMaxWidth = 1280;
-        private volatile StreamPublisher publisher;
-        private IntPtr staging;
-        private int streamMip, streamW, streamH;
 
         private const uint FORMAT_BGRA = 87, FORMAT_BGRA_SRGB = 91;
         private const int WAIT_TIMEOUT = unchecked((int)0x887A0027), ACCESS_LOST = unchecked((int)0x887A0026);
@@ -310,9 +303,6 @@ namespace GorillaDesktop
                                 finally { Com.Release(ref frameTex); }
                                 generateMips(context, privateView);
                                 dirty = true;
-
-                                var pub = publisher;
-                                if (pub != null && pub.WantsFrame) ReadbackForStream(pub, copy);
                             }
                         }
                         finally
@@ -343,50 +333,9 @@ namespace GorillaDesktop
             finally { Marshal.FreeHGlobal(info); }
         }
 
-        // Yakalama thread'i: uygun mip seviyesini (genişlik <= 1280) okunabilir dokuya kopyalayıp yayıncıya ver.
-        // Map, kopyanın bitmesini bekler; bu sadece bizim thread'imizi bekletir, oyunu değil
-        private void ReadbackForStream(StreamPublisher pub, CopySubresourceFn copy)
-        {
-            try
-            {
-                if (staging == IntPtr.Zero)
-                {
-                    streamMip = 0;
-                    while ((SourceWidth >> streamMip) > StreamMaxWidth && streamMip < mips - 1) streamMip++;
-                    streamW = Math.Max(1, SourceWidth >> streamMip);
-                    streamH = Math.Max(1, SourceHeight >> streamMip);
-                    // STAGING kullanımı, CPU okuma
-                    var desc = new[] { streamW, streamH, 1, 1, (int)format, 1, 0, 3, 0, 0x20000, 0 };
-                    var ptr = Marshal.AllocHGlobal(desc.Length * 4);
-                    try
-                    {
-                        Marshal.Copy(desc, 0, ptr, desc.Length);
-                        Com.Check(Com.Fn<CreateTextureFn>(device, 5)(device, ptr, IntPtr.Zero, out staging), "CreateTexture2D (staging)");
-                    }
-                    finally { Marshal.FreeHGlobal(ptr); }
-                }
-
-                copy(context, staging, 0, 0, 0, 0, privateTexture, (uint)streamMip, IntPtr.Zero);
-                var mapped = Marshal.AllocHGlobal(16);
-                try
-                {
-                    if (Com.Fn<MapFn>(context, 14)(context, staging, 0, 1 /* READ */, 0, mapped) < 0) return;
-                    try { pub.SubmitFrame(Marshal.ReadIntPtr(mapped), streamW, streamH, Marshal.ReadInt32(mapped, 8)); }
-                    finally { Com.Fn<UnmapFn>(context, 15)(context, staging, 0); }
-                }
-                finally { Marshal.FreeHGlobal(mapped); }
-            }
-            catch (Exception e)
-            {
-                Plugin.Log.LogWarning("Yayın karesi okunamadı: " + e.Message);
-                publisher = null;
-            }
-        }
-
         public void Dispose()
         {
             Stop();
-            Com.Release(ref staging);
             if (current == this) current = null;
             lock (consumeLock)
             {
@@ -418,8 +367,6 @@ namespace GorillaDesktop
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate void CopySubresourceFn(IntPtr self, IntPtr dst, uint dstSub, uint x, uint y, uint z, IntPtr src, uint srcSub, IntPtr box);
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate void GenerateMipsFn(IntPtr self, IntPtr view);
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate void FlushFn(IntPtr self);
-        [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int MapFn(IntPtr self, IntPtr resource, uint subresource, int type, uint flags, IntPtr mapped);
-        [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate void UnmapFn(IntPtr self, IntPtr resource, uint subresource);
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int AcquireSyncFn(IntPtr self, ulong key, uint ms);
         [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int ReleaseSyncFn(IntPtr self, ulong key);
 

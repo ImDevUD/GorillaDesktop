@@ -6,7 +6,7 @@ namespace GorillaDesktop
 {
     // Ekranın sağ üst köşesindeki ⚙ tuşu ve yanında açılan ayarlar paneli.
     // Satırlar: solda etiket, sağda kontrol (< değer >, aç/kapa anahtarı ya da tuş).
-    // Tuşlara parmakla (GT düğmeleri gibi) ya da açıksa lazerle basılır.
+    // Tuşlara parmakla basılır (GT düğmeleri gibi).
     internal sealed class SettingsUi
     {
         public sealed class Button
@@ -40,6 +40,8 @@ namespace GorillaDesktop
         private readonly bool[] handWasTouching = new bool[2];
         private readonly float[] handPrevFront = { 1f, 1f };
 
+        private readonly Font symbolFont;
+
         public bool Open { get; private set; }
 
         public SettingsUi(Transform parent, Func<Color, Material> makeMaterial, Font font)
@@ -54,7 +56,7 @@ namespace GorillaDesktop
             var gear = AddButton(root, new Vector2(0.065f, -0.035f), new Vector2(0.055f, 0.055f), "⚙", 1.5f, () => SetOpen(!Open));
             gear.Normal = new Color(0.12f, 0.12f, 0.15f);
             SetColor(gear.Mat, gear.Normal);
-            var symbolFont = Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI Symbol", "Segoe UI Emoji", "Arial" }, 64);
+            symbolFont = Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI Symbol", "Segoe UI Emoji", "Arial" }, 64);
             gear.Text.font = symbolFont;
             gear.Text.GetComponent<MeshRenderer>().material = symbolFont.material;
 
@@ -62,6 +64,16 @@ namespace GorillaDesktop
             panel.SetParent(root, false);
             panel.localPosition = new Vector3(0.11f, 0f, 0f);
             panel.gameObject.SetActive(false);
+        }
+
+        // Dişlinin altına sıralanan küçük kare tuşlar (Home, klavye)
+        public void AddSideButton(string glyph, int slot, Action onClick)
+        {
+            var b = AddButton(root, new Vector2(0.065f, -0.035f - slot * 0.07f), new Vector2(0.055f, 0.055f), glyph, 1.5f, onClick);
+            b.Normal = new Color(0.12f, 0.12f, 0.15f);
+            SetColor(b.Mat, b.Normal);
+            b.Text.font = symbolFont;
+            b.Text.GetComponent<MeshRenderer>().material = symbolFont.material;
         }
 
         public void AddHeader(string title)
@@ -83,7 +95,7 @@ namespace GorillaDesktop
             labels.Add((AddText(panel, new Vector2(mid, y), "", 0.8f, TextAnchor.MiddleCenter, Color.white), value));
         }
 
-        // Etiket .......... [ AÇIK ]
+        // Label .......... [ ON ]
         public void AddToggle(string label, Func<bool> state, Action toggle)
         {
             var y = BeginRow(label);
@@ -128,7 +140,7 @@ namespace GorillaDesktop
             {
                 if (b.State == null) continue;
                 var on = b.State();
-                b.Text.text = on ? "AÇIK" : "KAPALI";
+                b.Text.text = on ? "ON" : "OFF";
                 b.Normal = on ? OnColor : OffColor;
                 if (!b.Hovered) SetColor(b.Mat, b.Normal);
             }
@@ -140,28 +152,6 @@ namespace GorillaDesktop
             root.SetPositionAndRotation(screen.TransformPoint(new Vector3(0.5f, 0.5f, 0f)), screen.rotation);
         }
 
-        // Işının değdiği tuş (yoksa null)
-        public Button Raycast(Vector3 origin, Vector3 dir, out Vector3 point)
-        {
-            point = default;
-            Button best = null;
-            var bestDist = float.MaxValue;
-            foreach (var b in buttons)
-            {
-                if (!b.Visible) continue;
-                var normal = -b.T.forward;
-                if (Vector3.Dot(origin - b.T.position, normal) <= 0f) continue; // arkadan değil
-                var plane = new Plane(normal, b.T.position);
-                if (!plane.Raycast(new Ray(origin, dir), out var dist) || dist > 20f || dist >= bestDist) continue;
-                var p = origin + dir * dist;
-                var local = b.T.InverseTransformPoint(p);
-                if (Mathf.Abs(local.x) > 0.5f || Mathf.Abs(local.y) > 0.5f) continue;
-                best = b;
-                bestDist = dist;
-                point = p;
-            }
-            return best;
-        }
 
         // Parmak ucuyla basma (GT düğmeleri gibi): parmak tuşa önden girdiği anda bir kez tıklar.
         // Tıklayan elin sırasını döner (yoksa -1); parmak bir tuşun önündeyse 'hovered' dolar
@@ -203,12 +193,12 @@ namespace GorillaDesktop
             Refresh();
         }
 
-        // Lazerin/parmağın üstünde olduğu tuşları renklendir
-        public void SetHover(Button a, Button b, Button c, Button d)
+        // Parmağın önünde olduğu tuşları renklendir
+        public void SetHover(Button a, Button b)
         {
             foreach (var btn in buttons)
             {
-                var hovered = btn == a || btn == b || btn == c || btn == d;
+                var hovered = btn == a || btn == b;
                 if (hovered == btn.Hovered) continue;
                 btn.Hovered = hovered;
                 SetColor(btn.Mat, hovered ? HoverColor : btn.Normal);
