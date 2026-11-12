@@ -25,7 +25,7 @@ PC sound plays from your PC as usual; the mod does not touch audio.
 
 ## Install
 
-1. Install **BepInEx** for Gorilla Tag.
+1. Install **BepInEx 5** for Gorilla Tag.
 2. Download the latest zip from [Releases](../../releases).
 3. Put `GorillaDesktop.dll` into `Gorilla Tag\BepInEx\plugins`.
 4. Start the game and press **Y on the left controller**.
