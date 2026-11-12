@@ -31,7 +31,11 @@ namespace GorillaDesktop
         public static IntPtr LastWindow { get; private set; }
 
         private const string BrowserFlags =
-            "--disable-gpu --disable-features=HardwareSecureDecryption,HardwareSecureDecryptionExperiment,msPlayReadyHardwareDRM";
+            "--disable-gpu " +
+            // Oyun öndeyken Edge arka planda kısılmasın (ses/görüntü donmasın)
+            "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling " +
+            "--disable-features=HardwareSecureDecryption,HardwareSecureDecryptionExperiment,msPlayReadyHardwareDRM," +
+            "CalculateNativeWinOcclusion,UseEcoQoSForBackgroundProcess,IntensiveWakeUpThrottling";
 
         public static string Browser
         {
@@ -90,7 +94,9 @@ namespace GorillaDesktop
             lock (gate) windows.TryGetValue(id, out existing);
             if (existing != IntPtr.Zero && Native.IsWindow(existing) && Native.IsWindowVisible(existing))
             {
-                Fullscreen(existing, monitor, borderless: Desktop(id) != null);
+                var app = Desktop(id);
+                Fullscreen(existing, monitor, borderless: app != null);
+                Boost(app != null ? app.Process : Path.GetFileNameWithoutExtension(Browser));
                 return true;
             }
 
@@ -104,7 +110,19 @@ namespace GorillaDesktop
             lock (gate) windows[id] = hwnd;
             Thread.Sleep(400); // pencerenin yerleşmesini bekle
             Fullscreen(hwnd, monitor, borderless: desktop != null);
+            Boost(desktop != null ? desktop.Process : Path.GetFileNameWithoutExtension(Browser));
             return true;
+        }
+
+        // Oyun işlemciyi yoğun kullanırken uygulamanın sesi takılmasın: önceliğini biraz yükselt
+        private static void Boost(string processName)
+        {
+            foreach (var p in Process.GetProcessesByName(processName))
+            {
+                try { if (p.PriorityClass == ProcessPriorityClass.Normal) p.PriorityClass = ProcessPriorityClass.AboveNormal; }
+                catch { }
+                finally { p.Dispose(); }
+            }
         }
 
         // ---------------------------------------------------------------- web (Edge uygulama modu)

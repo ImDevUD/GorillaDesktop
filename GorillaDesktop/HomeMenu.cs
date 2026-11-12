@@ -219,6 +219,7 @@ namespace GorillaDesktop
         // uv: (0,0) sol Ã¼st, (1,1) saÄ alt. Dokunulan kartÄ±n kimliÄi (yoksa null)
         public string HitTest(Vector2 uv)
         {
+            if (Current == Page.Loading) return null; // loading screen: nothing to tap
             var p = new Vector2Int((int)(uv.x * W), (int)(uv.y * H));
             if (p.x >= 1460 && p.x <= 1545 && p.y >= 105 && p.y <= 195) return Settings; // tasarÄ±mdaki diÅli
             foreach (var item in Current == Page.Home ? homeItems : addItems)
@@ -229,7 +230,7 @@ namespace GorillaDesktop
         public void Hover(Vector2? uv)
         {
             Item? hit = null;
-            if (uv.HasValue)
+            if (uv.HasValue && Current != Page.Loading)
             {
                 var p = new Vector2Int((int)(uv.Value.x * W), (int)(uv.Value.y * H));
                 foreach (var item in Current == Page.Home ? homeItems : addItems)

@@ -13,12 +13,13 @@ Discord and more with your finger, or show your whole PC desktop.
   Discord and Spotify open their desktop apps if installed. A loading screen shows until the app is ready.
 - **Touch like a GT button:** Press the screen with your index fingertip to click, with the GT click sound
   and vibration.
-- **SteamVR-style keyboard:** Type with your fingers or point at keys and pull the trigger. Turkish letters,
+- **SteamVR-style keyboard:** Type with your fingers or point at keys and pull the trigger. English (QWERTY) layout,
   symbols and voice typing (Mic). Every key is sent right away.
 - **In-game monitor:** Your monitor at full resolution, captured on the GPU (Desktop Duplication).
   Does not slow the game down.
 - **Move and resize:** Grab the screen with grip; grab with both hands and pull apart / push together to resize.
-- **Lock:** Lock the screen in place. While locked, Y does not hide or move it and grip does not move it.
+- **Lock:** Lock the screen in place. While locked, Y does not hide or move it, grip does not move it and
+  the screen cannot be tapped (the gear still works so you can unlock).
 - **Settings panel:** The gear at the top right of the screen: lock, monitor, FPS, touch, click sound, GTV logo.
 
 PC sound plays from your PC as usual; the mod does not touch audio.

@@ -27,20 +27,20 @@ namespace GorillaDesktop
         private static readonly Color KeyColor = new Color(0.17f, 0.2f, 0.25f);
         private static readonly Color SpecialColor = new Color(0.11f, 0.13f, 0.17f);
         private static readonly Color HoverColor = new Color(0.18f, 0.44f, 0.84f);
-        private static readonly CultureInfo Tr = new CultureInfo("tr-TR");
+        private static readonly CultureInfo Tr = CultureInfo.InvariantCulture; // İngilizce: i → I
 
         private static readonly string[][] Letters =
         {
-            new[] { "q", "w", "e", "r", "t", "y", "u", "ı", "o", "p", "ğ", "ü" },
-            new[] { "a", "s", "d", "f", "g", "h", "j", "k", "l", "ş", "i" },
-            new[] { "z", "x", "c", "v", "b", "n", "m", "ö", "ç", "." },
+            new[] { "q", "w", "e", "r", "t", "y", "u", "i", "o", "p" },
+            new[] { "a", "s", "d", "f", "g", "h", "j", "k", "l" },
+            new[] { "z", "x", "c", "v", "b", "n", "m", ",", "." },
         };
 
         private static readonly string[][] Symbols =
         {
-            new[] { "-", "/", ":", ";", "(", ")", "₺", "&", "\"", "!", "?", "'" },
-            new[] { "_", "#", "%", "*", "+", "=", "[", "]", "{", "}", "~" },
-            new[] { "<", ">", "$", "€", "^", "|", "\\", "`", ",", "." },
+            new[] { "-", "/", ":", ";", "(", ")", "$", "&", "\"", "'" },
+            new[] { "_", "#", "%", "*", "+", "=", "[", "]", "!" },
+            new[] { "?", "<", ">", "€", "^", "|", "\\", "~", "." },
         };
 
         private readonly Transform root;
@@ -66,7 +66,7 @@ namespace GorillaDesktop
             root = new GameObject("Keyboard").transform;
             root.SetParent(parent, false);
 
-            width = 12 * K + 11 * Gap + 0.04f;
+            width = 11.5f * K + 10.5f * Gap + 0.04f;
             height = 6 * (K + Gap) + 0.05f;
 
             // Panel
@@ -85,12 +85,12 @@ namespace GorillaDesktop
 
             // 1: rakamlar + sil
             var nums = new[] { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" };
-            Row(rowY[1], nums, out var x);
+            Row(rowY[1], nums, 1.5f, out var x);
             AddKey(Kind.Back, "⌫", new Vector2(x + K * 0.75f, rowY[1]), K * 1.5f, SpecialColor);
 
             // 2-4: harfler (sembol sayfasında semboller)
-            Row(rowY[2], Letters[0], out _, true);
-            Row(rowY[3], Letters[1], out x, true);
+            Row(rowY[2], Letters[0], 0f, out _, true);
+            Row(rowY[3], Letters[1], 1.8f, out x, true);
             AddKey(Kind.Enter, "Enter", new Vector2(x + K * 0.9f, rowY[3]), K * 1.8f, SpecialColor);
             var shiftX = RowStart(Letters[2].Length + 1.5f);
             AddKey(Kind.Shift, "⇧", new Vector2(shiftX + K * 0.75f, rowY[4]), K * 1.5f, SpecialColor);
@@ -293,9 +293,10 @@ namespace GorillaDesktop
 
         private float RowStart(float units) => -(units * K + (units - 1) * Gap) / 2f;
 
-        private void Row(float y, string[] chars, out float endX, bool letters = false)
+        // extra: satır sonundaki özel tuşun genişliği (tuş birimi), satır onunla birlikte ortalanır
+        private void Row(float y, string[] chars, float extra, out float endX, bool letters = false)
         {
-            var units = chars.Length + (chars.Length <= 10 ? 1.5f : chars.Length == 11 ? 1.8f : 0f);
+            var units = chars.Length + extra;
             endX = RowFrom(RowStart(units), y, chars, letters);
         }
 

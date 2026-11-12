@@ -16,7 +16,7 @@ namespace GorillaDesktop
     {
         public const string Guid = "com.gorilladesktop.gtag";
         public const string Name = "GorillaDesktop";
-        public const string Version = "6.1.0";
+        public const string Version = "6.2.0";
 
         internal static ManualLogSource Log;
 
@@ -95,7 +95,7 @@ namespace GorillaDesktop
             forceGdi = Config.Bind("Ekran", "EskiYontemiZorla", false, "true = use the old (slow) GDI capture instead of GPU");
             showLogo = Config.Bind("Ekran", "GTVLogosu", true, "Show the white GTV logo on the bottom of the frame");
             locked = Config.Bind("Ekran", "Kilitli", false,
-                "Lock: Y does not hide/summon the screen and grip does not move it. The screen opens at its locked place");
+                "Lock: Y does not hide/summon the screen, grip does not move it and the screen cannot be tapped. The screen opens at its locked place");
             lockedPose = Config.Bind("Ekran", "KilitliKonum", "", "Used by the mod: where the screen was locked");
 
             const string keyHelp = "Windows virtual key code (decimal): learn.microsoft.com/windows/win32/inputdev/virtual-key-codes";
@@ -254,10 +254,17 @@ namespace GorillaDesktop
             }
             settings.SetHover(hoverA, hoverB);
 
-            // Ekrana dokunma: menü açıkken kartlara, değilse bilgisayar ekranına
-            if (vr && grabMode == 0 && !onKeyboard)
+            // Ekrana dokunma: menü açıkken kartlara, değilse bilgisayar ekranına.
+            // Kilitliyken ekrana tıklanmaz (ayar dişlisi çalışır, kilit oradan açılır)
+            if (vr && grabMode == 0 && !onKeyboard && !locked.Value)
             {
                 if (menu.Visible) UpdateMenuTouch(); else UpdateFingerTouch();
+            }
+            else if (locked.Value)
+            {
+                menu.Hover(null);
+                touchHand = -1;
+                prevFingerFront[0] = prevFingerFront[1] = 1f;
             }
             EndFrame();
         }
